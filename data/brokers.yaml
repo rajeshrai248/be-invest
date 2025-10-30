@@ -10,7 +10,7 @@ brokers:
     data_sources:
       - type: webpage
         description: Tariffs overview
-        url: https://www.bolero.be/eng/investing/costs-and-fees
+        url: https://www.bolero.be/uploads/media/667ecf0aabd9a/101-tarieven-nl.pdf
         allowed_to_scrape: false
         notes: "Review Bolero terms and conditions before attempting any automation."
     notes: "Request explicit permission before scraping; costs often presented via PDFs."
@@ -25,12 +25,12 @@ brokers:
     data_sources:
       - type: webpage
         description: Brokerage pricing overview
-        url: https://www.keytradebank.be/en/pricing/trading
+        url: https://assets.ctfassets.net/pniyec9izm4q/5VbvGvZ0r8C2Pk8wKneOak/ba9cdc0b8f5427a728eb68ee617dc520/Tarifs_en2025.pdf
         allowed_to_scrape: false
         notes: "Site relies on dynamic content; verify robots.txt and legal documents."
     notes: "Fees vary by market segment; capture per-instrument details manually."
   - name: Degiro Belgium
-    website: https://www.degiro.be/
+    website: https://www.degiro.nl/
     country: Belgium
     instruments:
       - Equities
@@ -40,12 +40,12 @@ brokers:
     data_sources:
       - type: pdf
         description: Fee schedule PDF
-        url: https://www.degiro.be/data/pdf/be/tarieven.pdf
+        url: https://www.degiro.nl/data/pdf/Tarievenoverzicht.pdf
         allowed_to_scrape: false
         notes: "PDF parsing requires manual verification; check ToS for restrictions."
     notes: "Degiro publishes periodic updates; track revision date for accuracy."
   - name: ING Self Invest
-    website: https://www.ing.be/en/retail/investing/ing-self-invest
+    website: https://www.ing.be/en/individuals/investing/ing-self-invest
     country: Belgium
     instruments:
       - Equities
@@ -55,12 +55,12 @@ brokers:
     data_sources:
       - type: webpage
         description: Tariffs overview
-        url: https://www.ing.be/en/retail/investing/fees-and-charges/ing-self-invest
+        url: https://assets.ing.com/m/2dbfdfb6dd2baf82/original/TariefRoerendeWaardeNewEN.pdf
         allowed_to_scrape: false
         notes: "Fees published via interactive tables and PDFs; confirm legal terms before automation."
       - type: pdf
         description: Detailed fee brochure
-        url: https://www.ing.be/Assets/Documents/pdf/Invest/INGSelfInvestRatesAndChargesEN.pdf
+        url: https://assets.ing.com/m/2dbfdfb6dd2baf82/original/TariefRoerendeWaardeNewEN.pdf
         allowed_to_scrape: false
         notes: "Download manually to capture revision date and important footnotes."
     notes: "Track both brokerage and custody charges; ING periodically updates documents without prior notice."

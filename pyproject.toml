@@ -17,6 +17,16 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = []
+scrape = [
+  "requests>=2.31",
+  "pdfminer.six>=20221105",
+]
+browser = [
+  "playwright>=1.45",
+]
+llm = [
+  "openai>=1.13.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

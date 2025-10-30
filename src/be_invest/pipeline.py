@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable, List
+import logging
 
 from .config_loader import load_brokers_from_directory, load_brokers_from_yaml
 from .models import Broker, FeeRecord
@@ -18,10 +19,16 @@ def load_brokers(config_paths: Iterable[Path]) -> List[Broker]:
 def load_fee_records(manual_fee_paths: Iterable[Path]) -> List[FeeRecord]:
     """Load fee records from manual data sources (CSV/TSV)."""
 
+    logger = logging.getLogger(__name__)
     records: List[FeeRecord] = []
     for path in manual_fee_paths:
         if path.exists():
+            logger.debug("Loading manual fee records from %s", path)
+            before = len(records)
             records.extend(load_manual_fee_records(path))
+            logger.debug("Loaded %d records from %s", len(records) - before, path)
+        else:
+            logger.debug("Manual fee path does not exist: %s", path)
     return records
 
 
