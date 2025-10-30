@@ -1,0 +1,46 @@
+brokers:
+  - name: Bolero
+    website: https://www.bolero.be/
+    country: Belgium
+    instruments:
+      - Equities
+      - ETFs
+      - Bonds
+      - Funds
+    data_sources:
+      - type: webpage
+        description: Tariffs overview
+        url: https://www.bolero.be/eng/investing/costs-and-fees
+        allowed_to_scrape: false
+        notes: "Review Bolero terms and conditions before attempting any automation."
+    notes: "Request explicit permission before scraping; costs often presented via PDFs."
+  - name: Keytrade Bank
+    website: https://www.keytradebank.be/
+    country: Belgium
+    instruments:
+      - Equities
+      - ETFs
+      - Funds
+      - Options
+    data_sources:
+      - type: webpage
+        description: Brokerage pricing overview
+        url: https://www.keytradebank.be/en/pricing/trading
+        allowed_to_scrape: false
+        notes: "Site relies on dynamic content; verify robots.txt and legal documents."
+    notes: "Fees vary by market segment; capture per-instrument details manually."
+  - name: Degiro Belgium
+    website: https://www.degiro.be/
+    country: Belgium
+    instruments:
+      - Equities
+      - ETFs
+      - Options
+      - Futures
+    data_sources:
+      - type: pdf
+        description: Fee schedule PDF
+        url: https://www.degiro.be/data/pdf/be/tarieven.pdf
+        allowed_to_scrape: false
+        notes: "PDF parsing requires manual verification; check ToS for restrictions."
+    notes: "Degiro publishes periodic updates; track revision date for accuracy."
