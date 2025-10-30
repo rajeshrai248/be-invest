@@ -44,3 +44,23 @@ brokers:
         allowed_to_scrape: false
         notes: "PDF parsing requires manual verification; check ToS for restrictions."
     notes: "Degiro publishes periodic updates; track revision date for accuracy."
+  - name: ING Self Invest
+    website: https://www.ing.be/en/retail/investing/ing-self-invest
+    country: Belgium
+    instruments:
+      - Equities
+      - ETFs
+      - Funds
+      - Bonds
+    data_sources:
+      - type: webpage
+        description: Tariffs overview
+        url: https://www.ing.be/en/retail/investing/fees-and-charges/ing-self-invest
+        allowed_to_scrape: false
+        notes: "Fees published via interactive tables and PDFs; confirm legal terms before automation."
+      - type: pdf
+        description: Detailed fee brochure
+        url: https://www.ing.be/Assets/Documents/pdf/Invest/INGSelfInvestRatesAndChargesEN.pdf
+        allowed_to_scrape: false
+        notes: "Download manually to capture revision date and important footnotes."
+    notes: "Track both brokerage and custody charges; ING periodically updates documents without prior notice."

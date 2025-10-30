@@ -1,2 +1,2 @@
 broker,instrument_type,order_channel,base_fee,variable_fee,currency,source,notes
-Demo Broker,Equities,Online Platform,0,0.35% of trade value,EUR,https://example.com/fees,Fictitious example values for structure demonstration only.
+Demo Broker,Equities,Online Platform,0,0.35% of trade value,EUR,https://example.com/fees,"Fictitious example values for structure demonstration only."
