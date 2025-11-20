@@ -27,6 +27,11 @@ browser = [
 llm = [
   "openai>=1.13.3",
 ]
+api = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "python-multipart>=0.0.9",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

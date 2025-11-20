@@ -42,8 +42,17 @@ brokers:
         description: Fee schedule PDF
         url: https://www.degiro.nl/data/pdf/Tarievenoverzicht.pdf
         allowed_to_scrape: false
-        notes: "PDF parsing requires manual verification; check ToS for restrictions."
-    notes: "Degiro publishes periodic updates; track revision date for accuracy."
+        notes: |
+          ⚠️ DEGIRO WAF BLOCKING: Degiro uses aggressive bot detection (Myracloud WAF).
+          Automated downloads will be blocked with 503 errors.
+          
+          SOLUTION: Download manually from browser:
+          1. Visit: https://www.degiro.nl/data/pdf/Tarievenoverzicht.pdf
+          2. Save to: data/pdfs/degiro_tarievenoverzicht.pdf
+          3. Rename as needed for consistency
+          
+          The automated system will detect and skip this broker gracefully.
+    notes: "Degiro uses aggressive WAF. Manual PDF download recommended. Fee structure is complex; requires careful analysis."
   - name: ING Self Invest
     website: https://www.ing.be/en/individuals/investing/ing-self-invest
     country: Belgium

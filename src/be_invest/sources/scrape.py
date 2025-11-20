@@ -12,6 +12,7 @@ from pathlib import Path
 from html.parser import HTMLParser
 from typing import List, Optional, Callable, Dict
 import logging
+import time
 
 try:  # Prefer requests when available, but keep stdlib fallback
     import requests  # type: ignore
@@ -33,6 +34,10 @@ _DEFAULT_HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 
@@ -56,6 +61,10 @@ def _get_session() -> Optional["requests.Session"]:
         adapter = HTTPAdapter(max_retries=retry)
         sess.mount("http://", adapter)
         sess.mount("https://", adapter)
+
+        # Add session-level headers that persist
+        sess.headers.update(_DEFAULT_HEADERS)
+
         return sess
     except Exception:  # pragma: no cover - optional dependency
         return requests.Session() if requests is not None else None
@@ -93,10 +102,81 @@ def _fetch_url(url: str, timeout: float = 10.0, fetcher: Optional[Fetcher] = Non
             sess = _get_session()
             assert sess is not None
             logger.debug("Fetching URL %s with requests session", url)
-            resp = sess.get(url, timeout=timeout, headers=_DEFAULT_HEADERS, allow_redirects=True)
-            logger.debug("Fetched %s -> %s, %d bytes", url, getattr(resp, 'status_code', '?'), len(resp.content or b""))
-            resp.raise_for_status()
-            return resp.content
+
+            # Special handling for Degiro - establish session first
+            if "degiro.nl" in url.lower():
+                logger.info("🔐 Degiro detected - establishing legitimate session...")
+                try:
+                    # Visit main site first to get cookies and establish legitimate session
+                    logger.info("⏱️ Step 1: Visiting Degiro main page...")
+                    time.sleep(1)
+                    main_resp = sess.get(
+                        "https://www.degiro.nl/",
+                        timeout=timeout,
+                        headers=_DEFAULT_HEADERS,
+                        allow_redirects=True,
+                        verify=True
+                    )
+                    logger.info(f"✓ Main page visited (status: {main_resp.status_code})")
+                    time.sleep(2)  # Wait before PDF request
+
+                    # Now try to get the PDF
+                    logger.info("⏱️ Step 2: Downloading PDF with established session...")
+                    headers = _DEFAULT_HEADERS.copy()
+                    headers["Referer"] = "https://www.degiro.nl/"
+
+                    resp = sess.get(
+                        url,
+                        timeout=timeout,
+                        headers=headers,
+                        allow_redirects=False,
+                        verify=True
+                    )
+                    logger.debug("Fetched %s -> %s, %d bytes", url, resp.status_code, len(resp.content or b""))
+
+                    if resp.status_code == 503 and "myracloud" in resp.text.lower():
+                        logger.warning("⚠️ Degiro WAF still blocked (503 myracloud)")
+                        logger.info("💡 Recommendation: Download manually from browser and save locally")
+                        return None
+
+                    resp.raise_for_status()
+                    logger.info(f"✅ Successfully downloaded Degiro PDF ({len(resp.content)} bytes)")
+                    return resp.content
+
+                except Exception as e:
+                    logger.warning(f"⚠️ Degiro PDF download failed: {e}")
+                    logger.info("💡 Try downloading manually from: https://www.degiro.nl/data/pdf/Tarievenoverzicht.pdf")
+                    return None
+
+            # Standard URL fetching for other brokers
+            headers = _DEFAULT_HEADERS.copy()
+            try:
+                resp = sess.get(
+                    url,
+                    timeout=timeout,
+                    headers=headers,
+                    allow_redirects=True,
+                    verify=True
+                )
+                logger.debug("Fetched %s -> %s, %d bytes", url, resp.status_code, len(resp.content or b""))
+                resp.raise_for_status()
+                return resp.content
+            except Exception as e:
+                logger.warning("Request failed for %s: %s. Retrying with verify=False...", url, e)
+                try:
+                    resp = sess.get(
+                        url,
+                        timeout=timeout,
+                        headers=headers,
+                        allow_redirects=True,
+                        verify=False
+                    )
+                    logger.debug("Fetched %s (verify=False) -> %s, %d bytes", url, resp.status_code, len(resp.content or b""))
+                    resp.raise_for_status()
+                    return resp.content
+                except Exception as e2:
+                    logger.warning("Retry also failed: %s", e2)
+                    return None
         # Fallback to urllib to avoid hard dependency
         from urllib.request import urlopen
         req_headers = _DEFAULT_HEADERS
@@ -443,6 +523,8 @@ def scrape_fee_records(
                                         llm_cache_dir=llm_cache_dir,
                                         max_output_tokens=llm_max_tokens,
                                         temperature=llm_temperature,
+                                        strict_mode=strict_parse,
+                                        focus_fee_lines=True,
                                     )
                                     if strict_parse:
                                         llm_rows = [r for r in llm_rows if (r.base_fee is not None and (r.variable_fee is not None and r.variable_fee != ""))]
