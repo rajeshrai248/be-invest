@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 
-@dataclass
+@dataclass(frozen=True)
 class DataSource:
     """Configuration for a broker data source."""
 
@@ -16,7 +16,7 @@ class DataSource:
     notes: Optional[str] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class Broker:
     """Basic information about an investment broker."""
 
@@ -28,7 +28,7 @@ class Broker:
     notes: Optional[str] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class FeeRecord:
     """Normalized representation of a single fee entry."""
 

@@ -11,15 +11,13 @@ be-invest/
 │   │   └── server.py           ← REST API (7 endpoints)
 │   ├── models.py               ← Data models
 │   ├── config_loader.py        ← Broker config
-│   ├── pipeline.py             ← Fee record processing
 │   └── sources/
-│       ├── manual.py           ← Manual CSV data
 │       ├── llm_extract.py      ← LLM-powered extraction
-│       └── scrape.py           ← Web scraping
+│       └── scrape.py           ← PDF scraping
 │
 ├── scripts/
 │   ├── run_api.py              ← Start REST API
-│   ├── generate_exhaustive_summary.py  ← Generate summaries
+│   ├── generate_summary_demo.py  ← Generate summaries
 │   └── test_api_examples.py    ← API examples
 │
 ├── data/
@@ -33,8 +31,6 @@ be-invest/
     ├── README.md               ← Start here
     ├── API_QUICK_START.md      ← 5 min setup
     ├── API_REFERENCE.md        ← All endpoints
-    ├── API_INTEGRATION.md      ← How to use
-    ├── BROKER_ANALYSIS.md      ← Broker data
     └── PROJECT_OVERVIEW.md     ← This file
 ```
 
@@ -55,14 +51,13 @@ be-invest/
 ├─────────────────────────────────────────────────────────────┤
 │  DATA SOURCES                                               │
 │  ├─ Broker PDFs (tariff documents)                         │
-│  ├─ Manual CSV (data/fees/manual_fees.csv)                 │
 │  └─ Broker Config (data/brokers.yaml)                      │
 │                                                             │
 ├─────────────────────────────────────────────────────────────┤
 │  PROCESSING LAYER                                           │
 │  ├─ PDF Extraction (PyMuPDF, pdfminer)                     │
 │  ├─ Text Normalization                                     │
-│  ├─ LLM Analysis (GPT-4o)                                  │
+│  ├─ LLM Analysis (GPT-4o, Claude 3)                        │
 │  └─ Fee Record Pipeline                                    │
 │                                                             │
 ├─────────────────────────────────────────────────────────────┤
@@ -88,7 +83,7 @@ be-invest/
 - `GET /summary` - Markdown report (<100ms)
 
 **Actions (Background):**
-- `POST /refresh-pdfs` - Download & extract (10-30s)
+- `POST /refresh-pdfs` - Download & extract PDFs (10-30s)
 - `POST /refresh-and-analyze` - Full pipeline (1-3 min)
 
 ---
@@ -108,11 +103,11 @@ Return instantly (<100ms)
 ```
 Client Request (POST /refresh-pdfs)
     ↓
-Download PDFs from URLs
+Download PDFs from URLs in brokers.yaml
     ↓
 Extract text using PyMuPDF/pdfminer
     ↓
-Save to pdf_text/
+Save to data/output/pdf_text/
     ↓
 Return status
 ```
@@ -125,7 +120,7 @@ Refresh PDFs (step 1)
     ↓
 Extract text (step 2)
     ↓
-Send to GPT-4o for analysis (step 3)
+Send to specified LLM for analysis (step 3)
     ↓
 Save broker_cost_analyses.json (step 4)
     ↓
@@ -140,7 +135,7 @@ Return results
 - **Framework**: FastAPI (Python)
 - **Server**: Uvicorn
 - **PDF Processing**: PyMuPDF, pdfminer.six
-- **LLM**: OpenAI GPT-4o
+- **LLM**: OpenAI (e.g., GPT-4o), Anthropic (e.g., Claude 3 Opus)
 - **Data**: JSON, YAML, CSV
 
 ### Data Models
@@ -149,9 +144,8 @@ Return results
 - **DataSource**: type, url, allowed_to_scrape, description
 
 ### Config Files
-- **brokers.yaml** - Broker metadata and PDF URLs
-- **manual_fees.csv** - Manual fee entries
-- **.env** - Environment variables (OPENAI_API_KEY)
+- **brokers.yaml** - Broker metadata and PDF URLs. Non-PDF sources are ignored by the automated process.
+- **.env** - Environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY)
 
 ---
 
@@ -159,41 +153,10 @@ Return results
 
 ✅ **Real-Time Data Access** - Sub-100ms queries via caching
 ✅ **PDF Refresh** - Download latest tariff documents on demand
-✅ **LLM Analysis** - GPT-4o powered fee structure extraction
+✅ **Multi-LLM Analysis** - Supports GPT-4o and Claude 3 models for fee structure extraction
 ✅ **Multiple Formats** - JSON for APIs, Markdown for reports
 ✅ **Error Handling** - Proper HTTP codes and error messages
-✅ **Security** - Respects scraping permissions
-✅ **Performance** - Optimized for speed
-
----
-
-## Security & Compliance
-
-### Scraping Permissions
-- Each broker has `allowed_to_scrape` flag in YAML
-- API respects this flag by default
-- Can override with `?force=true` if authorized
-
-### API Key Management
-- OPENAI_API_KEY via environment variables only
-- Never hardcoded
-- Required for LLM analysis endpoints
-
-### Data Privacy
-- PDFs cached locally only
-- No external storage
-- Safe error messages
-
----
-
-## Performance Metrics
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| GET /cost-analysis | <100ms | Cached JSON |
-| GET /summary | <100ms | Cached markdown |
-| POST /refresh-pdfs | 10-30s | Network + extraction |
-| POST /refresh-and-analyze | 1-3 min | Includes LLM calls |
+✅ **Security** - Respects scraping permissions in `brokers.yaml`
 
 ---
 
@@ -201,7 +164,8 @@ Return results
 
 ### Environment Variables
 ```bash
-OPENAI_API_KEY="sk-..."       # Required for LLM
+OPENAI_API_KEY="sk-..."       # Required for OpenAI models
+ANTHROPIC_API_KEY="sk-..."    # Required for Anthropic models
 LOG_LEVEL="INFO"              # Optional logging level
 ```
 
@@ -223,19 +187,9 @@ brokers:
 
 ### Add New Broker
 1. Add entry to `data/brokers.yaml`
-2. Set `allowed_to_scrape` appropriately
-3. Add PDF URL to `data_sources`
-4. Run: `python scripts/generate_exhaustive_summary.py`
-
-### Add Manual Fees
-1. Edit `data/fees/manual_fees.csv`
-2. Use required columns: broker, instrument_type, order_channel, base_fee, variable_fee, currency, source, notes
-3. Run pipeline to regenerate analysis
-
-### Customize API
-1. Modify `src/be_invest/api/server.py`
-2. Add authentication, caching, or other features
-3. Restart API server
+2. Provide a direct URL to a PDF fee document.
+3. Set `allowed_to_scrape` appropriately.
+4. Run: `python scripts/generate_summary_demo.py`
 
 ---
 
@@ -244,104 +198,12 @@ brokers:
 | Problem | Solution |
 |---------|----------|
 | API won't start | Check Python 3.8+ and dependencies |
-| 404 Cost analysis | Run `generate_exhaustive_summary.py` |
-| LLM fails | Set `OPENAIN_API_KEY` |
-| Slow refresh | Normal - LLM calls take time |
-| CORS issues | Use proxy or enable in production |
-
----
-
-## Dependencies
-
-### Core
-```
-fastapi        - Web framework
-uvicorn        - Server
-pydantic       - Data validation
-pyyaml         - YAML parsing
-```
-
-### PDF Processing
-```
-pymupdf        - PDF text extraction (preferred)
-pdfminer.six   - PDF extraction (fallback)
-```
-
-### LLM
-```
-openai         - GPT-4o integration
-```
-
-### Optional
-```
-requests       - HTTP client
-schedule       - Job scheduling
-gunicorn       - Production server
-```
-
----
-
-## File Sizes & Data
-
-**Broker Data**
-- 3 brokers analyzed
-- 4 languages supported
-- 41,000+ chars of PDF text extracted
-
-**Documentation**
-- 5 main guides
-- 3500+ lines total
-- Examples in 4 languages
-
-**Code**
-- 740+ lines of API code
-- 350+ lines of examples
-- Syntax validated
-
----
-
-## Deployment Options
-
-### Development
-```bash
-python scripts/run_api.py
-```
-
-### Production (Gunicorn)
-```bash
-gunicorn -w 4 -b 0.0.0.0:8000 be_invest.api.server:app
-```
-
-### Docker
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY . .
-RUN pip install -e .
-CMD ["python", "scripts/run_api.py"]
-```
-
-### Cloud Platforms
-- AWS Lambda
-- Google Cloud Run
-- Azure App Service
-- Heroku
-
----
-
-## Support & Documentation
-
-| Need | Resource |
-|------|----------|
-| Quick start | `API_QUICK_START.md` |
-| API details | `API_REFERENCE.md` |
-| Integration | `API_INTEGRATION.md` |
-| Broker data | `BROKER_ANALYSIS.md` |
-| This file | `PROJECT_OVERVIEW.md` |
+| 404 Cost analysis | Run `generate_summary_demo.py` |
+| LLM fails | Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` |
+| Broker missing from summary | Ensure the URL in `brokers.yaml` points directly to a PDF. |
 
 ---
 
 **Status**: ✅ Production Ready
 
-**Last Updated**: November 20, 2025
-
+**Last Updated**: December 5, 2025

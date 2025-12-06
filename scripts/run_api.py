@@ -13,4 +13,11 @@ import uvicorn  # type: ignore
 
 
 if __name__ == "__main__":
-    uvicorn.run("be_invest.api.server:app", host="127.0.0.1", port=8000, reload=True)
+    # Explicitly watch the 'src' directory for changes.
+    uvicorn.run(
+        "be_invest.api.server:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        reload_dirs=[str(SRC_PATH)]
+    )

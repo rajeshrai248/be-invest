@@ -73,3 +73,33 @@ brokers:
         allowed_to_scrape: false
         notes: "Download manually to capture revision date and important footnotes."
     notes: "Track both brokerage and custody charges; ING periodically updates documents without prior notice."
+  - name: Belfius
+    website: https://www.belfius.be/
+    country: Belgium
+    instruments:
+      - Equities
+      - ETFs
+      - Funds
+      - Bonds
+    data_sources:
+      - type: pdf
+        description: Tariff schedule (MIFID)
+        url: https://www.belfius.be/imagingservlet/GetDocument?id=TARIFBELPART_NL&src=mifid
+        allowed_to_scrape: false
+        notes: "Official tariff document published for MIFID compliance. Download and review for detailed fee structure."
+    notes: "Belfius provides comprehensive tariff documentation. Review custody fees and transaction costs per instrument type."
+  - name: Revolut
+    website: https://www.revolut.com/en-BE/
+    country: Belgium
+    instruments:
+      - Equities
+      - ETFs
+      - Crypto
+      - Commodities
+    data_sources:
+      - type: webpage
+        description: Trading fees
+        url: https://www.revolut.com/en-BE/legal/trading-fees/
+        allowed_to_scrape: true
+        notes: "Revolut's fees are presented on a webpage, not a PDF. Uses specialized Playwright scraper to extract fee information."
+    notes: "Revolut uses a subscription-based model (Standard, Plus, Premium, Metal, Ultra) with different fee structures for each. The analysis accounts for these tiers."
