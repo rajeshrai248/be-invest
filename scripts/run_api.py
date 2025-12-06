@@ -14,9 +14,10 @@ import uvicorn  # type: ignore
 
 if __name__ == "__main__":
     # Explicitly watch the 'src' directory for changes.
+    # host="0.0.0.0" allows connections from any network interface
     uvicorn.run(
         "be_invest.api.server:app",
-        host="127.0.0.1",
+        host="0.0.0.0",  # Changed from 127.0.0.1 to allow network access
         port=8000,
         reload=True,
         reload_dirs=[str(SRC_PATH)]

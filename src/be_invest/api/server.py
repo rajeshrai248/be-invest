@@ -21,13 +21,16 @@ from ..sources.llm_extract import extract_fee_records_via_llm
 app = FastAPI(title="be-invest PDF Text API", version="0.1.0")
 logger = logging.getLogger(__name__)
 
-# Add CORS middleware to support OPTIONS requests
+# Add CORS middleware to allow cross-origin requests from anywhere
+# IMPORTANT: When using wildcard origins ["*"], credentials MUST be False
+# If you need credentials, specify exact origins instead of wildcard
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allow all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods including OPTIONS
-    allow_headers=["*"],  # Allow all headers
+    allow_credentials=False,  # MUST be False with wildcard origins
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 def _default_output_dir() -> Path:
@@ -194,6 +197,28 @@ def _get_cost_analysis_data() -> Dict[str, Any]:
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+@app.options("/health")
+@app.options("/cost-analysis")
+@app.options("/cost-analysis/{broker_name}")
+@app.options("/cost-comparison-tables")
+@app.options("/financial-analysis")
+@app.options("/brokers")
+@app.options("/summary")
+@app.options("/refresh-pdfs")
+@app.options("/refresh-and-analyze")
+async def options_handler():
+    """Handle OPTIONS (preflight) requests for CORS."""
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "3600",
+            # NOTE: Do NOT include Access-Control-Allow-Credentials when using wildcard origin
+        }
+    )
 
 @app.get("/cost-analysis", response_class=JSONResponse)
 def get_cost_analysis() -> Dict[str, Any]:
