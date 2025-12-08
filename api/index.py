@@ -1,19 +1,38 @@
 """
 Vercel serverless function entrypoint for the be-invest API.
-This file exports the FastAPI app for Vercel's Python runtime.
 """
 import sys
-from pathlib import Path
+import os
 
-# Add the src directory to Python path so imports work in Vercel
-root_dir = Path(__file__).parent.parent
-src_dir = root_dir / "src"
-if str(src_dir) not in sys.path:
-    sys.path.insert(0, str(src_dir))
+# Try multiple possible paths for the be_invest package
+possible_paths = [
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"),
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "/var/task/src",
+    "/var/task",
+]
 
-# Now we can import the app
-from be_invest.api.server import app
+for path in possible_paths:
+    if path not in sys.path and os.path.exists(path):
+        sys.path.insert(0, path)
 
-# Vercel expects the ASGI application to be named 'app'
-# This is already defined in be_invest.api.server, so we just import it
+# Debug: Print sys.path and check if be_invest exists
+print(f"sys.path: {sys.path}")
+print(f"Files in /var/task: {os.listdir('/var/task') if os.path.exists('/var/task') else 'N/A'}")
+src_path = "/var/task/src"
+if os.path.exists(src_path):
+    print(f"Files in {src_path}: {os.listdir(src_path)}")
+    be_invest_path = os.path.join(src_path, "be_invest")
+    if os.path.exists(be_invest_path):
+        print(f"be_invest found at {be_invest_path}")
+        print(f"Contents: {os.listdir(be_invest_path)}")
+
+try:
+    from be_invest.api.server import app
+    print("✅ Successfully imported app")
+except ImportError as e:
+    print(f"❌ Import failed: {e}")
+    print(f"Current working directory: {os.getcwd()}")
+    raise
+
 
