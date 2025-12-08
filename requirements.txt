@@ -1,0 +1,25 @@
+# Core dependencies
+PyYAML>=6.0
+pydantic>=2.0
+
+# Scraping dependencies
+requests>=2.31
+pdfminer.six>=20221105
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Browser automation
+playwright>=1.45
+
+# LLM APIs
+openai>=1.13.3
+anthropic>=0.40.0
+
+# API dependencies
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+
+# RSS feed parsing
+feedparser>=6.0.10
+

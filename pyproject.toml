@@ -33,5 +33,8 @@ api = [
   "python-multipart>=0.0.9",
 ]
 
+[project.scripts]
+app = "be_invest.api.server:app"
+
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,0 +1,59 @@
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Scripts (not needed for API)
+scripts/
+
+# Data files (too large for deployment)
+data/pdfs/
+data/cache/
+data/output/*.md
+data/output/*.txt
+
+# Documentation (not needed for API)
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# Temporary files
+*.log
+*.tmp
+
