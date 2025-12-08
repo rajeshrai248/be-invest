@@ -1,22 +1,63 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional, Dict, Any
-from pathlib import Path
-from io import BytesIO
-from datetime import datetime
-import logging
-import json
 import hashlib
-import re
+import json
+import logging
 import os
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+
+from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, HttpUrl
 
 from ..config_loader import load_brokers_from_yaml
 from ..models import Broker
-from ..sources.scrape import scrape_fee_records, _fetch_url
-from ..sources.llm_extract import extract_fee_records_via_llm
+from ..sources.scrape import scrape_fee_records
+from ..sources.news_scrape import scrape_broker_news
+from ..news import NewsFlash, save_news_flash, load_news, get_news_by_broker, delete_news_flash, get_recent_news, get_news_statistics
+from ..utils.cache import FileCache
+
+
+# ========================================================================================
+# PYDANTIC MODELS
+# ========================================================================================
+
+class NewsFlashRequest(BaseModel):
+    """Request model for creating news flashes."""
+    broker: str
+    title: str
+    summary: str
+    url: Optional[HttpUrl] = None
+    date: Optional[str] = None
+    source: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class NewsFlashResponse(BaseModel):
+    """Response model for news flashes."""
+    broker: str
+    title: str
+    summary: str
+    url: Optional[str] = None
+    date: Optional[str] = None
+    source: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class NewsDeleteRequest(BaseModel):
+    """Request model for deleting news flashes."""
+    broker: str
+    title: str
+
+
+# ========================================================================================
+# FASTAPI APPLICATION
+# ========================================================================================
 
 app = FastAPI(title="be-invest PDF Text API", version="0.1.0")
 logger = logging.getLogger(__name__)
@@ -33,6 +74,11 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+# Initialize caches
+llm_cache = FileCache(Path("data/cache/llm"), default_ttl=7 * 24 * 3600)  # 7 days
+news_cache = FileCache(Path("data/cache/news"), default_ttl=24 * 3600)  # 24 hours
+
+
 def _default_output_dir() -> Path:
     """Resolve the output directory path."""
     cwd_path = Path("data") / "output"
@@ -42,6 +88,7 @@ def _default_output_dir() -> Path:
     fallback = repo_root / "data" / "output"
     return fallback
 
+
 def _default_brokers_yaml() -> Path:
     """Resolve the brokers.yaml file path."""
     cwd_path = Path("data") / "brokers.yaml"
@@ -50,6 +97,7 @@ def _default_brokers_yaml() -> Path:
     repo_root = Path(__file__).resolve().parents[3]
     fallback = repo_root / "data" / "brokers.yaml"
     return fallback
+
 
 def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format: str = "json") -> str:
     """
@@ -179,6 +227,7 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
             logger.error(f"❌ OpenAI API call failed: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {str(e)}")
 
+
 def _get_cost_analysis_data() -> Dict[str, Any]:
     """Helper to load the main cost analysis JSON."""
     output_dir = _default_output_dir()
@@ -194,9 +243,11 @@ def _get_cost_analysis_data() -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load analysis file: {exc}")
 
+
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
+
 
 @app.options("/health")
 @app.options("/cost-analysis")
@@ -207,6 +258,11 @@ def health() -> Dict[str, str]:
 @app.options("/summary")
 @app.options("/refresh-pdfs")
 @app.options("/refresh-and-analyze")
+@app.options("/news")
+@app.options("/news/broker/{broker_name}")
+@app.options("/news/recent")
+@app.options("/news/statistics")
+@app.options("/news/scrape")
 async def options_handler():
     """Handle OPTIONS (preflight) requests for CORS."""
     return JSONResponse(
@@ -220,28 +276,42 @@ async def options_handler():
         }
     )
 
+
 @app.get("/cost-analysis", response_class=JSONResponse)
 def get_cost_analysis() -> Dict[str, Any]:
     """Get the comprehensive cost and charges analysis for all brokers."""
     return _get_cost_analysis_data()
 
+
 @app.get("/cost-comparison-tables", response_class=JSONResponse)
 def get_cost_comparison_tables(
-    model: str = Query("gpt-4o", description="LLM to use: gpt-4o (default), claude-sonnet-4-20250514, gpt-4-turbo")
+        model: str = Query("gpt-4o", description="LLM to use: gpt-4o (default), claude-sonnet-4-20250514, gpt-4-turbo"),
+        force: bool = Query(False, description="Force fresh generation, ignore cache")
 ) -> Dict[str, Any]:
     """
     Generates three cost comparison tables for ETFs, Stocks, and Bonds
     based on the existing broker_cost_analyses.json data.
 
     Supports both OpenAI (gpt-*) and Anthropic (claude-*) models.
+    
+    Set force=True to bypass cache and generate fresh data.
 
     Role: You are a Financial Data Analyst specializing in the Belgian investment market.
 
     Task: Conduct a pricing analysis of Belgian brokerage platforms and output the data
     into three distinct matrix tables.
     """
+    # Check cache first (unless force=True)
+    cache_key = FileCache.make_key("cost_comparison", model)
+    if not force:
+        cached = llm_cache.get(cache_key)
+        if cached:
+            logger.info(f"📦 Returning cached cost comparison tables for model: {model}")
+            return cached
+
+    # ... (existing logic continues)
     cost_data = _get_cost_analysis_data()
-    
+
     # Extract broker names
     broker_names = [name for name in cost_data.keys() if "error" not in cost_data.get(name, {})]
 
@@ -396,6 +466,10 @@ Return ONLY the JSON object. No explanations, no apologies, no markdown formatti
 
         logger.info(f"✅ Successfully generated comparison tables for {len(result.get('etfs', []))} brokers")
 
+        # Cache the result
+        llm_cache.set(cache_key, result)
+        logger.info(f"💾 Cached cost comparison tables for model: {model}")
+
         return result
 
     except json.JSONDecodeError as e:
@@ -406,9 +480,11 @@ Return ONLY the JSON object. No explanations, no apologies, no markdown formatti
         logger.error(f"❌ Failed to generate cost comparison tables: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate cost comparison tables: {e}")
 
+
 @app.get("/financial-analysis")
 def generate_financial_analysis(
-    model: str = Query("gpt-4o", description="LLM to use: gpt-4o (default), claude-sonnet-4-20250514")
+        model: str = Query("gpt-4o", description="LLM to use: gpt-4o (default), claude-sonnet-4-20250514"),
+        force: bool = Query(False, description="Force fresh generation, ignore cache")
 ) -> Dict[str, Any]:
     """
     Generate a comprehensive financial analysis comparing Belgian investment brokers.
@@ -423,6 +499,15 @@ def generate_financial_analysis(
 
     Perfect for React/Vue/Angular apps to render with custom styling.
     """
+    # Check cache first (unless force=True)
+    cache_key = FileCache.make_key("financial_analysis", model)
+    if not force:
+        cached = llm_cache.get(cache_key)
+        if cached:
+            logger.info(f"📦 Returning cached financial analysis for model: {model}")
+            return cached
+
+    # ... (existing logic continues)
     cost_data = _get_cost_analysis_data()
 
     # Extract broker names
@@ -435,8 +520,23 @@ def generate_financial_analysis(
         )
 
     # Prepare comprehensive prompt for financial analysis
-    system_prompt = """You are a senior financial analyst and investment journalist specializing in Belgian financial markets. 
-You create structured, data-driven content for modern financial applications."""
+    system_prompt = """
+    Act as a Senior Financial Analyst and Investment Journalist specializing in the Euronext Brussels market. I need a structured, evidence-based investment memo on [INSERT TICKER/COMPANY NAME HERE] designed for a modern financial application (mobile-first, scannable).
+
+Your analysis must include:
+
+The 'Lede': A 2-sentence executive summary of the current investment thesis.
+
+Quantitative Evidence: Use LaTeX for financial formulas. Focus on Free Cash Flow (FCF), EBITDA margins, Net Debt/EBITDA, and P/E ratios relative to historical averages and peers.
+
+The Belgian Context: Analyze specific local factors (e.g., Belgian withholding tax, index weighting in the BEL20, exposure to the Belgian economy/bonds).
+
+Bull vs. Bear: Three distinct, data-backed points for both the upside and downside.
+
+Valuation & Verdict: A clear rating (Buy/Hold/Sell) based on a specific valuation method (DCF or Peer Multiples).
+
+Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize hard data.
+    """
 
     # Create explicit list of all brokers
     broker_list = ", ".join(broker_names)
@@ -549,6 +649,10 @@ CRITICAL RULES:
         logger.info(f"✅ Financial analysis generated successfully")
         logger.info(f"   Brokers included: {len(result.get('brokerComparisons', []))}/{len(broker_names)}")
 
+        # Cache the result
+        llm_cache.set(cache_key, result)
+        logger.info(f"💾 Cached financial analysis for model: {model}")
+
         return result
 
     except HTTPException:
@@ -557,7 +661,7 @@ CRITICAL RULES:
         logger.error(f"❌ Failed to generate financial analysis: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate financial analysis: {e}")
 
-# The rest of the server file remains the same...
+
 @app.get("/brokers")
 def list_brokers() -> List[Dict[str, Any]]:
     path = _default_brokers_yaml()
@@ -566,11 +670,14 @@ def list_brokers() -> List[Dict[str, Any]]:
     brokers: List[Broker] = load_brokers_from_yaml(path)
     return [b.dict() for b in brokers]
 
+
 @app.post("/refresh-pdfs")
 def refresh_pdfs(
-    brokers_to_refresh: Optional[List[str]] = Query(None, description="Specific brokers to refresh (if None, refreshes all)"),
-    force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
-    save_dir: Optional[str] = Query(None, description="Directory to save extracted text (default: data/output/pdf_text)"),
+        brokers_to_refresh: Optional[List[str]] = Query(None,
+                                                        description="Specific brokers to refresh (if None, refreshes all)"),
+        force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
+        save_dir: Optional[str] = Query(None,
+                                        description="Directory to save extracted text (default: data/output/pdf_text)"),
 ) -> Dict[str, Any]:
     brokers_yaml = _default_brokers_yaml()
     if not brokers_yaml.exists():
@@ -610,7 +717,7 @@ def refresh_pdfs(
             pdf_text_dump_dir=output_dir,
             use_playwright=True
         )
-        
+
         broker_summary = {}
         for record in scraped_records:
             broker_summary.setdefault(record.broker, 0)
@@ -627,6 +734,7 @@ def refresh_pdfs(
         logger.error("An error occurred during the scraping process.", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
 
+
 def _default_pdf_text_dir() -> Path:
     """Resolve the PDF text directory path."""
     cwd_path = Path("data") / "output" / "pdf_text"
@@ -635,6 +743,7 @@ def _default_pdf_text_dir() -> Path:
     repo_root = Path(__file__).resolve().parents[3]
     fallback = repo_root / "data" / "output" / "pdf_text"
     return fallback
+
 
 @app.get("/cost-analysis/{broker_name}")
 def get_broker_cost_analysis(broker_name: str) -> Dict[str, Any]:
@@ -666,6 +775,7 @@ def get_broker_cost_analysis(broker_name: str) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load analysis: {str(exc)}")
 
+
 @app.get("/summary")
 def get_summary() -> str:
     output_dir = _default_output_dir()
@@ -687,9 +797,10 @@ def get_summary() -> str:
 
 @app.post("/refresh-and-analyze")
 def refresh_and_analyze(
-    brokers_to_process: Optional[List[str]] = Query(None, description="Specific brokers to analyze (if None, analyzes all)"),
-    force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
-    model: str = Query("gpt-4o", description="LLM model: gpt-4o (default), claude-sonnet-4-20250514, etc."),
+        brokers_to_process: Optional[List[str]] = Query(None,
+                                                        description="Specific brokers to analyze (if None, analyzes all)"),
+        force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
+        model: str = Query("gpt-4o", description="LLM model: gpt-4o (default), claude-sonnet-4-20250514, etc."),
 ) -> Dict[str, Any]:
     """
     Refresh PDFs, extract text, and generate comprehensive cost analysis.
@@ -698,7 +809,6 @@ def refresh_and_analyze(
     Supports both OpenAI (gpt-*) and Anthropic (claude-*) models.
     """
     import time
-    from pathlib import Path
 
     logger.info("=" * 80)
     logger.info("🚀 REFRESH AND ANALYZE REQUEST")
@@ -872,3 +982,274 @@ Return ONLY a valid JSON object with structured fee data.
         "output_file": str(json_output_path)
     }
 
+
+# ========================================================================================
+# NEWS FLASH ENDPOINTS
+# ========================================================================================
+
+@app.post("/news/scrape")
+def scrape_news_endpoint(
+    brokers_to_scrape: Optional[List[str]] = Query(None, description="Specific brokers to scrape (if None, scrapes all with news_sources)"),
+    force: bool = Query(False, description="Force fresh scrape, ignore cache"),
+) -> Dict[str, Any]:
+    """
+    Automatically scrape news from broker websites, RSS feeds, and APIs.
+
+    Set force=True to bypass cache and perform fresh scrape.
+    """
+    import time
+    start_time = time.time()
+
+    try:
+        # Check cache first (unless force=True)
+        cache_key = FileCache.make_key("news_scrape", ",".join(brokers_to_scrape) if brokers_to_scrape else "all")
+        if not force:
+            cached = news_cache.get(cache_key)
+            if cached:
+                logger.info(f"📦 Returning cached news scrape results")
+                cached["duration_seconds"] = round(time.time() - start_time, 2)
+                cached["from_cache"] = True
+                return cached
+
+        # Load brokers configuration
+        brokers_yaml = _default_brokers_yaml()
+        if not brokers_yaml.exists():
+            raise HTTPException(status_code=404, detail=f"Brokers file not found: {brokers_yaml}")
+
+        all_brokers = load_brokers_from_yaml(brokers_yaml)
+
+        # Filter brokers if specified
+        if brokers_to_scrape:
+            brokers_to_process = [
+                b for b in all_brokers
+                if b.name.lower() in [name.lower() for name in brokers_to_scrape]
+            ]
+            if not brokers_to_process:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No brokers found matching: {brokers_to_scrape}"
+                )
+        else:
+            # Only process brokers that have news_sources configured
+            brokers_to_process = [b for b in all_brokers if b.news_sources]
+
+        if not brokers_to_process:
+            response = {
+                "status": "no_news_sources",
+                "message": "No brokers have news_sources configured",
+                "brokers_checked": len(all_brokers),
+                "duration_seconds": round(time.time() - start_time, 2)
+            }
+            return response
+
+        logger.info("=" * 80)
+        logger.info("📰 AUTOMATED NEWS SCRAPING STARTED")
+        logger.info("=" * 80)
+        logger.info(f"🎯 Brokers to process: {[b.name for b in brokers_to_process]} (force={force})")
+
+        # Perform the scraping
+        scraped_news = scrape_broker_news(brokers_to_process, force=force)
+
+        # Group results by broker for summary
+        broker_summary = {}
+        error_summary = {}
+
+        for broker in brokers_to_process:
+            broker_news_count = len([n for n in scraped_news if n.broker == broker.name])
+            if broker_news_count > 0:
+                broker_summary[broker.name] = broker_news_count
+
+            # Check for any news sources that might have failed
+            if broker.news_sources:
+                sources_attempted = len([s for s in broker.news_sources if s.allowed_to_scrape or force])
+                if sources_attempted > 0 and broker_news_count == 0:
+                    error_summary[broker.name] = f"No news found from {sources_attempted} source(s)"
+
+        duration = round(time.time() - start_time, 2)
+
+        logger.info("=" * 80)
+        logger.info("✅ AUTOMATED NEWS SCRAPING COMPLETED")
+        logger.info("=" * 80)
+        logger.info(f"📊 Total news items: {len(scraped_news)}")
+        logger.info(f"⏱️ Duration: {duration}s")
+
+        # Convert news items to response format
+        news_items_response = [
+            {
+                "broker": news.broker,
+                "title": news.title,
+                "summary": news.summary[:150] + "..." if len(news.summary) > 150 else news.summary,
+                "url": news.url,
+                "date": news.date,
+                "source": news.source
+            }
+            for news in scraped_news
+        ]
+
+        response = {
+            "status": "success",
+            "message": f"Successfully scraped {len(scraped_news)} news items from {len(broker_summary)} brokers",
+            "news_by_broker": broker_summary,
+            "news_items": news_items_response,  # Add actual news items with URLs
+            "total_scraped": len(scraped_news),
+            "brokers_with_news": len(broker_summary),
+            "brokers_processed": len(brokers_to_process),
+            "duration_seconds": duration,
+            "from_cache": False
+        }
+
+        if error_summary:
+            response["warnings"] = error_summary
+
+        # Cache the result
+        news_cache.set(cache_key, response)
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ News scraping failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"News scraping failed: {str(e)}")
+
+
+@app.post("/news", status_code=201)
+def add_news_flash(news: NewsFlashRequest) -> Dict[str, str]:
+    """
+    Add a new news flash for a broker.
+    """
+    try:
+        # Convert Pydantic model to NewsFlash dataclass
+        news_flash = NewsFlash(
+            broker=news.broker,
+            title=news.title,
+            summary=news.summary,
+            url=str(news.url) if news.url else None,
+            date=news.date,
+            source=news.source,
+            notes=news.notes
+        )
+
+        save_news_flash(news_flash)
+
+        return {
+            "status": "success",
+            "message": f"News flash added for {news.broker}",
+            "broker": news.broker,
+            "title": news.title
+        }
+    except Exception as e:
+        logger.error(f"❌ Failed to save news flash: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save news flash: {str(e)}")
+
+
+@app.get("/news", response_model=List[NewsFlashResponse])
+def get_all_news() -> List[NewsFlashResponse]:
+    """
+    Get all news flashes, sorted by creation date (newest first).
+    """
+    try:
+        news_list = load_news()
+        return [
+            NewsFlashResponse(
+                broker=news.broker,
+                title=news.title,
+                summary=news.summary,
+                url=news.url,
+                date=news.date,
+                source=news.source,
+                notes=news.notes,
+                created_at=news.created_at
+            )
+            for news in news_list
+        ]
+    except Exception as e:
+        logger.error(f"❌ Failed to load news: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load news: {str(e)}")
+
+
+@app.get("/news/broker/{broker_name}", response_model=List[NewsFlashResponse])
+def get_news_for_broker(broker_name: str) -> List[NewsFlashResponse]:
+    """
+    Get all news flashes for a specific broker.
+    """
+    try:
+        news_list = get_news_by_broker(broker_name)
+        return [
+            NewsFlashResponse(
+                broker=news.broker,
+                title=news.title,
+                summary=news.summary,
+                url=news.url,
+                date=news.date,
+                source=news.source,
+                notes=news.notes,
+                created_at=news.created_at
+            )
+            for news in news_list
+        ]
+    except Exception as e:
+        logger.error(f"❌ Failed to load news for {broker_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load news for broker: {str(e)}")
+
+
+@app.get("/news/recent", response_model=List[NewsFlashResponse])
+def get_recent_news_endpoint(limit: int = Query(10, description="Maximum number of news items to return")) -> List[NewsFlashResponse]:
+    """
+    Get the most recent news flashes across all brokers.
+    """
+    try:
+        news_list = get_recent_news(limit)
+        return [
+            NewsFlashResponse(
+                broker=news.broker,
+                title=news.title,
+                summary=news.summary,
+                url=news.url,
+                date=news.date,
+                source=news.source,
+                notes=news.notes,
+                created_at=news.created_at
+            )
+            for news in news_list
+        ]
+    except Exception as e:
+        logger.error(f"❌ Failed to load recent news: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load recent news: {str(e)}")
+
+
+@app.get("/news/statistics")
+def get_news_stats() -> Dict[str, Any]:
+    """
+    Get statistics about the news data.
+    """
+    try:
+        return get_news_statistics()
+    except Exception as e:
+        logger.error(f"❌ Failed to get news statistics: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get news statistics: {str(e)}")
+
+
+@app.delete("/news")
+def delete_news_endpoint(request: NewsDeleteRequest) -> Dict[str, str]:
+    """
+    Delete a specific news flash by broker and title.
+    """
+    try:
+        deleted = delete_news_flash(request.broker, request.title)
+
+        if deleted:
+            return {
+                "status": "success",
+                "message": f"News flash deleted for {request.broker}: {request.title}"
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"News flash not found for {request.broker}: {request.title}"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to delete news flash: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete news flash: {str(e)}")

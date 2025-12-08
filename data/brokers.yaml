@@ -12,8 +12,12 @@ brokers:
         description: Tariffs overview
         url: https://www.bolero.be/uploads/media/667ecf0aabd9a/101-tarieven-nl.pdf
         allowed_to_scrape: false
-        notes: "Review Bolero terms and conditions before attempting any automation."
-    notes: "Request explicit permission before scraping; costs often presented via PDFs."
+    news_sources:
+      - url: https://www.bolero.be/nl/analyse-en-inzicht/blog
+        type: webpage
+        selector: ".blog__entry"
+        allowed_to_scrape: true
+        description: "Bolero Market News"
   - name: Keytrade Bank
     website: https://www.keytradebank.be/
     country: Belgium
@@ -27,8 +31,12 @@ brokers:
         description: Brokerage pricing overview
         url: https://assets.ctfassets.net/pniyec9izm4q/5VbvGvZ0r8C2Pk8wKneOak/ba9cdc0b8f5427a728eb68ee617dc520/Tarifs_en2025.pdf
         allowed_to_scrape: false
-        notes: "Site relies on dynamic content; verify robots.txt and legal documents."
-    notes: "Fees vary by market segment; capture per-instrument details manually."
+    news_sources:
+      - url: https://www.keytradebank.be/en/our-blog/investing/
+        type: webpage
+        selector: "a[class*='Card']"
+        allowed_to_scrape: true
+        description: "Keytrade Bank News"
   - name: Degiro Belgium
     website: https://www.degiro.nl/
     country: Belgium
@@ -42,17 +50,12 @@ brokers:
         description: Fee schedule PDF
         url: https://www.degiro.nl/data/pdf/Tarievenoverzicht.pdf
         allowed_to_scrape: false
-        notes: |
-          ⚠️ DEGIRO WAF BLOCKING: Degiro uses aggressive bot detection (Myracloud WAF).
-          Automated downloads will be blocked with 503 errors.
-          
-          SOLUTION: Download manually from browser:
-          1. Visit: https://www.degiro.nl/data/pdf/Tarievenoverzicht.pdf
-          2. Save to: data/pdfs/degiro_tarievenoverzicht.pdf
-          3. Rename as needed for consistency
-          
-          The automated system will detect and skip this broker gracefully.
-    notes: "Degiro uses aggressive WAF. Manual PDF download recommended. Fee structure is complex; requires careful analysis."
+    news_sources:
+      - url: https://www.degiro.nl/blog/
+        type: webpage
+        selector: "h2"
+        allowed_to_scrape: false  # Site blocks automated access
+        description: "DEGIRO Belgium News"
   - name: ING Self Invest
     website: https://www.ing.be/en/individuals/investing/ing-self-invest
     country: Belgium
@@ -66,13 +69,12 @@ brokers:
         description: Tariffs overview
         url: https://assets.ing.com/m/2dbfdfb6dd2baf82/original/TariefRoerendeWaardeNewEN.pdf
         allowed_to_scrape: false
-        notes: "Fees published via interactive tables and PDFs; confirm legal terms before automation."
-      - type: pdf
-        description: Detailed fee brochure
-        url: https://assets.ing.com/m/2dbfdfb6dd2baf82/original/TariefRoerendeWaardeNewEN.pdf
-        allowed_to_scrape: false
-        notes: "Download manually to capture revision date and important footnotes."
-    notes: "Track both brokerage and custody charges; ING periodically updates documents without prior notice."
+    news_sources:
+      - url: https://newsroom.ing.be/en
+        type: webpage
+        selector: ""
+        allowed_to_scrape: true
+        description: "ING Group Newsroom"
   - name: Belfius
     website: https://www.belfius.be/
     country: Belgium
@@ -86,8 +88,12 @@ brokers:
         description: Tariff schedule (MIFID)
         url: https://www.belfius.be/imagingservlet/GetDocument?id=TARIFBELPART_NL&src=mifid
         allowed_to_scrape: false
-        notes: "Official tariff document published for MIFID compliance. Download and review for detailed fee structure."
-    notes: "Belfius provides comprehensive tariff documentation. Review custody fees and transaction costs per instrument type."
+    news_sources:
+      - url: https://www.belfius.be/retail/nl/publicaties/actualiteit/index.aspx
+        type: webpage
+        selector: "article"
+        allowed_to_scrape: true
+        description: "Belfius News"
   - name: Revolut
     website: https://www.revolut.com/en-BE/
     country: Belgium
@@ -99,7 +105,11 @@ brokers:
     data_sources:
       - type: webpage
         description: Trading fees
-        url: https://www.revolut.com/en-BE/legal/trading-fees/
-        allowed_to_scrape: true
-        notes: "Revolut's fees are presented on a webpage, not a PDF. Uses specialized Playwright scraper to extract fee information."
-    notes: "Revolut uses a subscription-based model (Standard, Plus, Premium, Metal, Ultra) with different fee structures for each. The analysis accounts for these tiers."
+        url: https://help.revolut.com/help/wealth/stocks/trading-stocks/trading-fees/what-fees-will-i-be-charged-for-my-trading/
+        allowed_to_scrape: true  # ENABLED - uses Playwright to bypass 403 errors
+    news_sources:
+      - url: https://www.revolut.com/en-BE/news/
+        type: webpage
+        selector: "[class*='RecentPosts__Post-']"
+        allowed_to_scrape: false
+        description: "Revolut News (DISABLED - returns junk data)"

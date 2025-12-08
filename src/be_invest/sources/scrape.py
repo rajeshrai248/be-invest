@@ -71,8 +71,8 @@ def _get_session() -> Optional["requests.Session"]:
         return requests.Session() if requests is not None else None
 
 
-def _fetch_url(url: str, timeout: float = 10.0) -> Tuple[Optional[bytes], Optional[str]]:
-    """Fetch raw bytes from a URL using the requests library."""
+def _fetch_url(url: str, timeout: float = 10.0, use_playwright_fallback: bool = True) -> Tuple[Optional[bytes], Optional[str]]:
+    """Fetch raw bytes from a URL using requests library, with Playwright fallback for 403 errors."""
     if not url:
         return None, "URL is empty"
     try:
@@ -83,12 +83,20 @@ def _fetch_url(url: str, timeout: float = 10.0) -> Tuple[Optional[bytes], Option
         if p.exists():
             return p.read_bytes(), None
 
+        # Try requests first
         if requests is not None:
-            sess = _get_session()
-            assert sess is not None
-            resp = sess.get(url, timeout=timeout, headers=_DEFAULT_HEADERS, allow_redirects=True, verify=True)
-            resp.raise_for_status()
-            return resp.content, None
+            try:
+                sess = _get_session()
+                assert sess is not None
+                resp = sess.get(url, timeout=timeout, headers=_DEFAULT_HEADERS, allow_redirects=True, verify=True)
+                resp.raise_for_status()
+                return resp.content, None
+            except HTTPError as e:
+                # If 403 Forbidden, fall back to Playwright
+                if e.response.status_code == 403 and use_playwright_fallback:
+                    logger.warning(f"Requests got 403 for {url}, falling back to Playwright...")
+                    return _fetch_url_with_playwright(url, timeout)
+                raise
         else:
             from urllib.request import urlopen, Request
             req = Request(url, headers=_DEFAULT_HEADERS)
@@ -96,6 +104,29 @@ def _fetch_url(url: str, timeout: float = 10.0) -> Tuple[Optional[bytes], Option
                 return response.read(), None
     except Exception as exc:
         error_msg = f"Failed to fetch {url}: {exc}"
+        logger.error(error_msg, exc_info=True)
+        return None, error_msg
+
+
+def _fetch_url_with_playwright(url: str, timeout: float = 10.0) -> Tuple[Optional[bytes], Optional[str]]:
+    """Fetch URL content using Playwright to bypass bot detection.
+    Uses text extraction for better LLM analysis."""
+    try:
+        from ..fetchers import Fetcher
+        logger.info(f"Using Playwright to fetch {url}...")
+        fetcher = Fetcher(use_playwright=True)
+        # Extract visible text for data scraping (better for LLM)
+        html_bytes, error = fetcher.fetch(url, timeout=timeout, extract_text=True)
+
+        if error:
+            return None, f"Playwright fetch failed: {error}"
+        if not html_bytes:
+            return None, "Playwright returned empty content"
+
+        logger.info(f"Successfully fetched {len(html_bytes)} bytes with Playwright")
+        return html_bytes, None
+    except Exception as exc:
+        error_msg = f"Playwright fetch failed for {url}: {exc}"
         logger.error(error_msg, exc_info=True)
         return None, error_msg
 
@@ -109,7 +140,7 @@ def scrape_fee_records(
     Attempts to scrape fee records for all brokers from PDF sources.
     Non-PDF sources are ignored.
     """
-    logger.info("Starting PDF scrape process for %d brokers...", len(brokers))
+    logger.info("Starting scrape process for %d brokers...", len(brokers))
     all_records: List[FeeRecord] = []
 
     for broker in brokers:
@@ -119,19 +150,29 @@ def scrape_fee_records(
             if not ds.url or (ds.allowed_to_scrape is False and not force):
                 continue
             
-            # This simplified version only processes URLs that look like PDFs
-            if not ds.url.lower().endswith('.pdf'):
-                logger.info("Skipping non-PDF data source for %s: %s", broker.name, ds.url)
+            is_pdf = ds.url.lower().endswith('.pdf')
+            is_webpage = ds.type == "webpage" or (not is_pdf and ds.url.startswith('http'))
+            
+            # Skip non-PDF, non-webpage sources
+            if not is_pdf and not is_webpage:
+                logger.info("Skipping unknown source type for %s: %s", broker.name, ds.url)
                 continue
 
-            logger.debug("Fetching PDF URL for %s: %s", broker.name, ds.url)
-            raw_bytes, fetch_error = _fetch_url(ds.url, timeout=timeout)
+            logger.debug("Fetching %s for %s: %s", 'PDF' if is_pdf else 'webpage', broker.name, ds.url)
+
+            # Always use Playwright for Revolut (bypasses bot detection)
+            if broker.name == "Revolut":
+                logger.info(f"Using Playwright for Revolut (bypasses bot detection)...")
+                raw_bytes, fetch_error = _fetch_url_with_playwright(ds.url, timeout)
+            else:
+                raw_bytes, fetch_error = _fetch_url(ds.url, timeout=timeout)
 
             if not raw_bytes:
                 logger.warning("No data fetched for %s from %s. Error: %s", broker.name, ds.url, fetch_error)
                 continue
 
-            if raw_bytes.startswith(b"%PDF"):
+            # Handle PDF
+            if is_pdf and raw_bytes.startswith(b"%PDF"):
                 logger.debug("Processing PDF for %s (%d bytes)", broker.name, len(raw_bytes))
                 try:
                     from pdfminer.high_level import extract_text
@@ -159,8 +200,45 @@ def scrape_fee_records(
 
                 except Exception as exc:
                     logger.error("PDF processing failed for %s", broker.name, exc_info=True)
+
+            # Handle Webpage (HTML) sources
+            elif is_webpage:
+                logger.debug("Processing webpage for %s", broker.name)
+                try:
+                    # Decode HTML and extract text
+                    try:
+                        html_str = raw_bytes.decode('utf-8', errors='ignore')
+                    except Exception:
+                        html_str = raw_bytes.decode('latin-1', errors='ignore')
+
+                    # Save HTML content to text file (same as PDF)
+                    if pdf_text_dump_dir and html_str.strip():
+                        pdf_text_dump_dir.mkdir(parents=True, exist_ok=True)
+                        safe_broker_name = re.sub(r'[\s/]+', '_', broker.name)
+                        safe_desc = re.sub(r'[\s/]+', '_', ds.description or 'document')
+                        url_hash = hashlib.md5(ds.url.encode()).hexdigest()[:8]
+                        text_filename = f"{safe_broker_name}_{safe_desc}_{url_hash}.txt"
+                        out_path = pdf_text_dump_dir / text_filename
+                        out_path.write_text(html_str, encoding="utf-8")
+                        logger.info("Saved extracted webpage text to %s", out_path)
+
+                    # Use LLM to extract fee records from HTML content
+                    if use_llm and html_str.strip():
+                        logger.info("Using LLM to extract fees from webpage for %s", broker.name)
+                        llm_rows = extract_fee_records_via_llm(
+                            html_str, broker=broker.name, source_url=ds.url, model=llm_model,
+                            llm_cache_dir=llm_cache_dir, max_output_tokens=llm_max_tokens,
+                            temperature=llm_temperature, strict_mode=strict_parse
+                        )
+                        all_records.extend(llm_rows)
+                        logger.info("LLM extracted %d records for %s from webpage.", len(llm_rows), broker.name)
+                    else:
+                        logger.warning("Webpage source requires use_llm=True for %s", broker.name)
+
+                except Exception as exc:
+                    logger.error("Webpage processing failed for %s", broker.name, exc_info=True)
             else:
-                logger.warning("Skipping non-PDF content for %s from %s.", broker.name, ds.url)
+                logger.warning("Skipping non-PDF/non-webpage content for %s from %s.", broker.name, ds.url)
 
     logger.info("Scrape finished. Found %d total records.", len(all_records))
     unique_records = list(dict.fromkeys(all_records))

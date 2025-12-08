@@ -6,7 +6,7 @@ from typing import Iterable, List
 
 import yaml
 
-from .models import Broker, DataSource
+from .models import Broker, DataSource, NewsSource
 
 
 def _load_yaml(path: Path) -> dict:
@@ -30,6 +30,19 @@ def load_brokers_from_yaml(path: Path) -> List[Broker]:
             )
             for source in entry.get("data_sources", [])
         ]
+
+        news_sources = [
+            NewsSource(
+                url=source.get("url", ""),
+                type=source.get("type", "webpage"),
+                selector=source.get("selector"),
+                allowed_to_scrape=source.get("allowed_to_scrape", False),
+                description=source.get("description"),
+                notes=source.get("notes"),
+            )
+            for source in entry.get("news_sources", [])
+        ]
+
         brokers.append(
             Broker(
                 name=entry.get("name", ""),
@@ -37,6 +50,7 @@ def load_brokers_from_yaml(path: Path) -> List[Broker]:
                 country=entry.get("country", ""),
                 instruments=list(entry.get("instruments", [])),
                 data_sources=data_sources,
+                news_sources=news_sources,
                 notes=entry.get("notes"),
             )
         )
