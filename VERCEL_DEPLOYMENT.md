@@ -68,8 +68,30 @@ For full functionality (including Playwright for Revolut scraping):
 ### "No fastapi entrypoint found"
 ✅ Fixed by creating `api/index.py` that imports the app from `be_invest.api.server`
 
+### "ModuleNotFoundError: No module named 'be_invest'"
+✅ **Fixed!** This error occurs when Vercel can't find the `be_invest` package.
+
+**Solution implemented:**
+1. **Updated `api/index.py`** to add `src/` directory to Python path:
+   ```python
+   import sys
+   from pathlib import Path
+   
+   root_dir = Path(__file__).parent.parent
+   src_dir = root_dir / "src"
+   sys.path.insert(0, str(src_dir))
+   
+   from be_invest.api.server import app
+   ```
+
+2. **Created `setup.py`** for proper package installation
+
+3. **Updated `vercel.json`** to set `PYTHONPATH` environment variable
+
+4. **Updated `.vercelignore`** to ensure `src/` directory is included
+
 ### Import errors
-Make sure `requirements.txt` includes all dependencies
+Make sure `requirements.txt` includes all dependencies and `src/` directory is deployed
 
 ### Timeout errors
 Long-running operations (PDF processing, LLM analysis) may timeout. Use async operations or background tasks.

@@ -1,0 +1,13 @@
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+recursive-include src/be_invest *.py
+recursive-include data *.yaml *.yml
+prune tests
+prune scripts
+prune validate
+prune data/pdfs
+prune data/cache
+prune data/output
+

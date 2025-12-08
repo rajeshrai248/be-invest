@@ -24,6 +24,7 @@ wheels/
 venv/
 ENV/
 env/
+.venv/
 
 # IDE
 .vscode/
@@ -36,18 +37,22 @@ tests/
 test_*.py
 *_test.py
 
-# Scripts (not needed for API)
-scripts/
+# Scripts (not needed for API, but keep if referenced)
+scripts/validate/
+scripts/test/
 
-# Data files (too large for deployment)
+# Large data files (too large for deployment)
 data/pdfs/
 data/cache/
 data/output/*.md
 data/output/*.txt
+data/output/pdf_text/
 
-# Documentation (not needed for API)
+# Documentation (keep essential ones)
 *.md
 !README.md
+!QUICK_START.md
+!VERCEL_DEPLOYMENT.md
 
 # Git
 .git/
@@ -56,4 +61,13 @@ data/output/*.txt
 # Temporary files
 *.log
 *.tmp
+
+# Keep these important files
+!src/
+!data/brokers.yaml
+!requirements.txt
+!setup.py
+!pyproject.toml
+!vercel.json
+!api/
 
