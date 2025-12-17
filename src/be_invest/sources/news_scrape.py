@@ -375,14 +375,37 @@ class NewsScraper:
     def _extract_url(self, article, base_url: str) -> Optional[str]:
         # Check if article itself is a link
         if article.name == 'a' and article.get('href'):
-            return urljoin(base_url, article.get('href'))
+            href = article.get('href')
+        else:
+            # Otherwise look for link inside article
+            link = article.select_one('a[href]')
+            if not link or not link.get('href'):
+                return None
+            href = link.get('href')
 
-        # Otherwise look for link inside article
-        link = article.select_one('a[href]')
-        if link and link.get('href'):
-            return urljoin(base_url, link.get('href'))
+        # Handle relative URLs properly to avoid duplication
+        if href.startswith(('http://', 'https://')):
+            # Already absolute URL
+            return href
+        elif href.startswith('/'):
+            # Root-relative URL
+            from urllib.parse import urlparse
+            parsed_base = urlparse(base_url)
+            return f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
+        else:
+            # Relative URL - need to be careful about duplication
+            # If the relative URL starts with the same path segment as base_url ends with,
+            # we might have duplication
+            from urllib.parse import urlparse
+            parsed_base = urlparse(base_url)
+            base_path = parsed_base.path.rstrip('/')
 
-        return None
+            # Check for path segment duplication (e.g., base ends with /blog/ and href starts with blog/)
+            if base_path and href.startswith(base_path.split('/')[-1] + '/'):
+                # Remove the duplicate segment
+                href = href[len(base_path.split('/')[-1]) + 1:]
+
+            return urljoin(base_url, href)
 
     def _extract_date(self, article) -> Optional[str]:
         for selector in ['time', '.date', '[datetime]']:

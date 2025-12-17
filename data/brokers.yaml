@@ -53,9 +53,10 @@ brokers:
     news_sources:
       - url: https://www.degiro.nl/blog/
         type: webpage
-        selector: "h2"
-        allowed_to_scrape: false  # Site blocks automated access
+        selector: ".wrapper-box, article, .post-list .wrapper-box"
+        allowed_to_scrape: true
         description: "DEGIRO Belgium News"
+        notes: "Site is accessible - improved selector based on HTML analysis"
   - name: ING Self Invest
     website: https://www.ing.be/en/individuals/investing/ing-self-invest
     country: Belgium
@@ -72,9 +73,9 @@ brokers:
     news_sources:
       - url: https://newsroom.ing.be/en
         type: webpage
-        selector: ""
-        allowed_to_scrape: true
+        allowed_to_scrape: false
         description: "ING Group Newsroom"
+        notes: "Access restricted (403 Forbidden) + Brotli compression issues - needs alternative source"
   - name: Rebel
     website: https://www.belfius.be/
     country: Belgium
@@ -124,4 +125,5 @@ brokers:
         type: webpage
         selector: "[class*='RecentPosts__Post-']"
         allowed_to_scrape: false
-        description: "Revolut News (DISABLED - returns junk data)"
+        description: "Revolut News"
+        notes: "Disabled - returns junk data"
