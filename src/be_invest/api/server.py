@@ -5,10 +5,12 @@ import json
 import logging
 import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+import datetime
 from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -154,15 +156,38 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
 
                 response_text = response.content[0].text
 
-                # Clean up any markdown formatting Claude might add
-                if response_format == "json" and response_text.strip().startswith("```"):
+                # Clean up any markdown formatting and common JSON issues Claude might add
+                if response_format == "json":
                     # Remove markdown code blocks
-                    lines = response_text.strip().split("\n")
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].startswith("```"):
-                        lines = lines[:-1]
-                    response_text = "\n".join(lines).strip()
+                    if response_text.strip().startswith("```"):
+                        lines = response_text.strip().split("\n")
+                        if lines[0].startswith("```"):
+                            lines = lines[1:]
+                        if lines and lines[-1].strip().startswith("```"):
+                            lines = lines[:-1]
+                        response_text = "\n".join(lines).strip()
+
+                    # Clean up common Claude JSON issues
+                    response_text = response_text.strip()
+
+                    # Remove any text before the first {
+                    first_brace = response_text.find('{')
+                    if first_brace > 0:
+                        response_text = response_text[first_brace:]
+
+                    # Remove any text after the last }
+                    last_brace = response_text.rfind('}')
+                    if last_brace > 0 and last_brace < len(response_text) - 1:
+                        response_text = response_text[:last_brace + 1]
+
+                    # Try to validate JSON and fix common issues
+                    try:
+                        json.loads(response_text)
+                    except json.JSONDecodeError as json_error:
+                        logger.warning(f"⚠️ Claude returned invalid JSON, attempting to fix: {json_error}")
+                        # Try to fix common issues like unescaped quotes or trailing commas
+                        # This is a basic attempt - if it fails, we'll let the calling function handle it
+                        pass
 
                 return response_text
 
@@ -243,6 +268,20 @@ def _get_cost_analysis_data() -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load analysis file: {exc}")
 
+def _get_cost_comparison_data() -> Dict[str, Any]:
+    """Helper to load the cost comparison analysis JSON."""
+    output_dir = _default_output_dir()
+    analysis_file = output_dir / "cost_comparison_tables.json"
+    if not analysis_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Cost analysis file not found. Run generate_exhaustive_summary.py first."
+        )
+    try:
+        with open(analysis_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load analysis file: {exc}")
 
 @app.get("/health")
 def health() -> Dict[str, str]:
@@ -322,115 +361,140 @@ def get_cost_comparison_tables(
         )
 
     # Prepare detailed instructions for the LLM
-    prompt = f"""You are a Financial Data Analyst specializing in the Belgian investment market.
+    prompt = f"""You are a Lead Financial Data Analyst specializing in the Belgian investment market.
 
-TASK: Conduct a precise pricing analysis of Belgian brokerage platforms and output the data into three distinct matrix tables.
+    TASK: Conduct a rigorous pricing analysis of Belgian brokerage platforms for the **Euronext Brussels** exchange.
+    Output the data into a structured JSON dataset grouped strictly by **Market**, then by **Asset Class**.
 
-BROKERS TO ANALYZE: {', '.join(broker_names)}
+    BROKERS TO ANALYZE: {', '.join(broker_names)}
 
-TRANSACTION SIZES (in EUR): 250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000
+    TRANSACTION SIZES (in EUR): 250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000
 
-BROKER DATA:
-{json.dumps(cost_data, indent=2)}
+    MARKETS TO ANALYZE:
+    1. **Euronext Brussels** (Stocks)
+    2. **Euronext Brussels** (ETFs)
+    3. **Euronext Brussels** (Bonds - Secondary Market)
 
-CRITICAL INSTRUCTIONS:
+    BROKER DATA:
+    {json.dumps(cost_data, indent=2)}
 
-1. **Parse Tiered Fee Structures Correctly**:
-   
-   Example from Keytrade Bank stocks (brussels_amsterdam_paris):
-   ```
-   "0_to_€_250": "€ 2.45"
-   "€_250.01_to_€_2,500": "€ 5.95"
-   "€_2,500.01_to_€_10,000": "€ 14.95"
-   "each_additional_€_10,000": "+ € 7.50"
-   ```
-   
-   Calculations:
-   - €250: €2.45 (tier 1)
-   - €500: €5.95 (tier 2)
-   - €1000: €5.95 (tier 2)
-   - €1500: €5.95 (tier 2)
-   - €2000: €5.95 (tier 2)
-   - €2500: €5.95 (tier 2, upper bound)
-   - €5000: €14.95 (tier 3)
-   - €10000: €14.95 (tier 3, upper bound)
-   - €50000: €14.95 + ((50000-10000)/10000)*7.50 = 14.95 + 30.00 = 44.95
+    ### CRITICAL INSTRUCTIONS
 
-2. **Parse Percentage + Minimum Fee Structures**:
-   
-   Example from ING Self Invest stocks (via web/app on Euronext Brussels/Amsterdam/Paris):
-   ```
-   "via_web_and_app": "0.35%"
-   "min_via_web_and_app": "€1"
-   ```
-   
-   Calculations:
-   - €250: max(250 * 0.0035, 1) = max(0.875, 1) = €1.00
-   - €500: max(500 * 0.0035, 1) = max(1.75, 1) = €1.75
-   - €1000: max(1000 * 0.0035, 1) = max(3.50, 1) = €3.50
-   - €1500: max(1500 * 0.0035, 1) = €5.25
-   - €2000: max(2000 * 0.0035, 1) = €7.00
-   - €2500: max(2500 * 0.0035, 1) = €8.75
-   - €5000: max(5000 * 0.0035, 1) = €17.50
-   - €10000: max(10000 * 0.0035, 1) = €35.00
-   - €50000: max(50000 * 0.0035, 1) = €175.00
+    1. **Fee Analysis**:
+       - **Handling Fees**: ALWAYS ADD any "Handling" or "Service" fees to the base fee (e.g., Degiro's €1.00 handling fee).
+       - **Slice Logic**:
+         - **Rebel**: Above €2,500, the fee is per *started* slice.
+         - **Keytrade**: Above €2,500, base fee applies up to €10k. Above €10k, add "additional slice" cost for every extra €10k started.
+         - **Bolero**: Respect the "Max" caps defined in the tiers.
+       - **Bond Minimums**: Pay close attention to minimum fees for bonds (e.g., ING's €50 minimum, Keytrade's €29.95 minimum).
 
-3. **Product-Specific Fee Selection**:
-   - **Stocks**: Look for "stock_markets_online", "shares", "equities", "aandelen" keys
-   - **ETFs**: Look for "ETF", "trackers", "etfs" keys. Use standard fees, not free selections
-   - **Bonds**: Look for "bonds", "obligaties", "bond_markets" keys
-   
-   For ING Self Invest:
-   - Stocks/ETFs: Use "shares_stock_exchange_traded_funds_trackers" → "euronext_brussels_amsterdam_paris" → "via_web_and_app"
-   - Bonds: Use "bonds" section with 0.50% fee and €50 minimum
+    2. **Calculation Logic (EXHAUSTIVE & MANDATORY)**:
+       - For **EVERY** Broker (Bolero, Keytrade, Degiro, ING, Rebel, Revolut):
+       - For **EVERY** Asset Class (Stocks, ETFs, Bonds):
+       - You MUST provide a specific text explanation for **ALL 9 TIERS**:
+         `["250", "500", "1000", "1500", "2000", "2500", "5000", "10000", "50000"]`
+       - **STRICT PROHIBITION**: Do not skip keys. Do not group keys (e.g., do not say "250-2500: €3"). Do not say "Same as stocks". You must write out the logic for every single line item.
+       - **Format**: Show the math. E.g., "Base €14.95 + (4 x €7.50 slices) = €44.95".
 
-4. **Handle Different Data Formats**:
-   - Comma decimals: "€ 2,5" → 2.50
-   - Ranges with slashes: "€ 15/€ 10.000 (max. € 50)" → means €15 per €10,000, capped at €50
-   - Percentages: "0.35%" → 0.0035 multiplier
-   - Multiple tiers: Apply the correct tier based on transaction amount
+    3. **Notes & Hidden Fees (VERIFIED)**:
+       - **Custody Fees**: Check ING Self Invest carefully (0.0242%/month).
+       - **Real-Time Quotes**: Verify cost in source (Keytrade €2.50/mo vs Bolero Free).
+       - **Connectivity Fees**: Mention Degiro's €2.50/yr fee.
+    
+    ### PHASE 1: LOGIC EXTRACTION (CRITICAL)
+    Before calculating any numbers, you must scan the data and extract the **Lowest Available Online/Web Rate** for each broker.
+    **Rules for Extraction**:
+    1. **Online Priority**: If multiple fees exist (e.g., "Standard" vs "Web App" or "Offline" vs "Online"), YOU MUST CHOOSE THE "ONLINE/WEB/APP" RATE. Ignore "Phone", "Desk", or "Normal" rates if a cheaper digital option exists.
+       - *Example Fix*: For ING, ignore "1% (Min €40)". Pick "0.35% (Min €1)".
+    2. **Rate Identification**:
+       - If text says "25 per 10,000", translate to: `Amount * 0.0025`.
+       - If text says "15 per 10,000 slice", translate to: `ceil(Amount/10000) * 15`.
+    3. **Constraint Identification**: Note all Minimums (Floor) and Maximums (Cap).
+    
+    ### PHASE 2: CALCULATION
+    Calculate the fee for these exact amounts: [250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000].
+    *Perform the calculation step-by-step in your reasoning to ensure accuracy.*
 
-5. **Currency Conversion**:
-   - 1 USD = 0.92 EUR
-   - 1 GBP = 1.17 EUR
-   - Convert all results to EUR
+    ### OUTPUT FORMAT
+    Return ONLY a valid JSON object.
 
-6. **Avoid Common Mistakes**:
-   - ❌ DO NOT use the minimum fee for all transaction sizes
-   - ❌ DO NOT create duplicate broker rows
-   - ❌ DO NOT ignore percentage calculations
-   - ❌ DO NOT use tier 1 fees for all amounts
-   - ✅ DO calculate each transaction size individually
-   - ✅ DO apply the correct tier for each amount
-   - ✅ DO use max(percentage_fee, minimum_fee) when both exist
-
-7. **Output Format**: Return ONLY a valid JSON object with this EXACT structure:
-{{
-  "etfs": [
-    {{"broker": "ING Self Invest", "250": 1.0, "500": 1.75, "1000": 3.5, "1500": 5.25, "2000": 7.0, "2500": 8.75, "5000": 17.5, "10000": 35.0, "50000": 175.0}},
-    {{"broker": "Bolero", "250": 2.5, "500": 5.0, "1000": 5.0, "1500": 7.5, "2000": 7.5, "2500": 7.5, "5000": 10.0, "10000": 15.0, "50000": 50.0}},
-    {{"broker": "Keytrade Bank", "250": 2.45, "500": 5.95, "1000": 5.95, "1500": 5.95, "2000": 5.95, "2500": 5.95, "5000": 14.95, "10000": 14.95, "50000": 44.95}}
-  ],
-  "stocks": [
-    {{"broker": "ING Self Invest", "250": 1.0, "500": 1.75, ...}},
-    {{"broker": "Bolero", "250": 2.5, "500": 5.0, ...}},
-    {{"broker": "Keytrade Bank", "250": 2.45, "500": 5.95, ...}}
-  ],
-  "bonds": [
-    {{"broker": "ING Self Invest", "250": 50.0, "500": 50.0, ...}},
-    {{"broker": "Bolero", "250": null, ...}},
-    {{"broker": "Keytrade Bank", "250": 29.95, ...}}
-  ],
-  "notes": {{
-    "ING Self Invest": {{"stocks": "0.35% with €1 minimum via web/app", "etfs": "Same as stocks", "bonds": "0.50% with €50 minimum"}},
-    "Keytrade Bank": {{"stocks": "Tiered pricing: €2.45 up to €250, €5.95 up to €2,500, €14.95 up to €10,000, then +€7.50 per €10,000"}},
-    "Bolero": {{"stocks": "Tiered pricing with max €50", "bonds": "Primary market only: €25 per €10,000"}}
-  }}
-}}
-
-8. **Broker Order**: List each broker EXACTLY ONCE. Sort alphabetically with ING Self Invest first.
-
-Return ONLY the JSON object. No explanations, no apologies, no markdown formatting."""
+    {{
+      "euronext_brussels": {{
+        "stocks": [
+          {{
+            "broker": "Rebel",
+            "250": 3.00,
+            "500": 3.00,
+            "1000": 3.00,
+            "1500": 3.00,
+            "2000": 3.00,
+            "2500": 3.00,
+            "5000": 10.00,
+            "10000": 10.00,
+            "50000": 50.00
+          }}
+        ],
+        "etfs": [ ... ],
+        "bonds": [ ... ],
+        "calculation_logic": {{
+          "Rebel": {{
+            "stocks": {{
+              "250": "Tier 1: Flat fee of €3 (<= €2,500)",
+              "500": "Tier 1: Flat fee of €3 (<= €2,500)",
+              "1000": "Tier 1: Flat fee of €3 (<= €2,500)",
+              "1500": "Tier 1: Flat fee of €3 (<= €2,500)",
+              "2000": "Tier 1: Flat fee of €3 (<= €2,500)",
+              "2500": "Tier 1: Flat fee of €3 (<= €2,500)",
+              "5000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
+              "10000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
+              "50000": "Slice Tier (>€2,500): 5 x €10k slices = €50"
+            }},
+            "etfs": {{
+              "250": "Tier 1: Flat fee of €1 (<= €250)",
+              "500": "Tier 2: Flat fee of €2 (<= €1,000)",
+              "1000": "Tier 3: Flat fee of €3 (<= €2,500)",
+              "1500": "Tier 3: Flat fee of €3 (<= €2,500)",
+              "2000": "Tier 3: Flat fee of €3 (<= €2,500)",
+              "2500": "Tier 3: Flat fee of €3 (<= €2,500)",
+              "5000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
+              "10000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
+              "50000": "Slice Tier (>€2,500): 5 x €10k slices = €50"
+            }}
+          }},
+          "Keytrade Bank": {{
+            "stocks": {{
+              "250": "Tier 1: Flat fee of €2.45 (<= €250)",
+              "500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "1000": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "1500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "2000": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "2500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "5000": "Tier 3: Flat fee of €14.95 (<= €10,000)",
+              "10000": "Tier 3: Flat fee of €14.95 (<= €10,000)",
+              "50000": "Tier 4: €14.95 (base) + 4 additional €10k slices (€7.50 each) = €44.95"
+            }},
+            "etfs": {{
+              "250": "Tier 1: Flat fee of €2.45 (<= €250)",
+              "500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "1000": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "1500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "2000": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "2500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
+              "5000": "Tier 3: Flat fee of €14.95 (<= €10,000)",
+              "10000": "Tier 3: Flat fee of €14.95 (<= €10,000)",
+              "50000": "Tier 4: €14.95 (base) + 4 additional €10k slices (€7.50 each) = €44.95"
+            }}
+          }}
+        }},
+        "notes": {{
+          "Rebel": "Free real-time quotes. No custody fee.",
+          "Degiro Belgium": "Includes €1 handling fee. Connectivity fee (€2.50/yr) applies.",
+          "Keytrade Bank": "Real-time quotes cost €2.50/month (Euronext). No custody fee.",
+          "ING Self Invest": "0.0242% monthly custody fee applies to shares/ETFs (min €0.30/mo)."
+        }}
+      }}
+    }}
+    """
 
     system_prompt = "You are a precise financial data analyst. You calculate exact transaction costs and return only valid JSON with numeric values."
 
@@ -443,28 +507,81 @@ Return ONLY the JSON object. No explanations, no apologies, no markdown formatti
         if not response_text:
             raise HTTPException(status_code=500, detail="LLM returned an empty response.")
 
-        # Parse and validate response
-        result = json.loads(response_text)
+        # Parse and validate response with Claude fallback
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ JSON parsing failed for {model}: {e}")
+            logger.error(f"Response preview: {response_text[:500]}")
 
-        # Validation
-        required_keys = ["etfs", "stocks", "bonds"]
-        for key in required_keys:
-            if key not in result:
-                raise ValueError(f"Missing required key: {key}")
-            if not isinstance(result[key], list):
-                raise ValueError(f"Key '{key}' must be a list")
+            # If Claude failed, try with GPT-4o as fallback
+            if model.startswith("claude"):
+                logger.info("🔄 Retrying with GPT-4o due to JSON parsing failure...")
+                try:
+                    response_text = _call_llm("gpt-4o", system_prompt, prompt, response_format="json")
+                    result = json.loads(response_text)
+                    logger.info("✅ Successfully generated with GPT-4o fallback")
+                except Exception as fallback_error:
+                    logger.error(f"❌ Fallback to GPT-4o also failed: {fallback_error}")
+                    raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
+            else:
+                raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
 
-        # Validate structure of each table
-        transaction_sizes = ["250", "500", "1000", "1500", "2000", "2500", "5000", "10000", "50000"]
-        for table_name in required_keys:
-            for row in result[table_name]:
-                if "broker" not in row:
-                    raise ValueError(f"Row in '{table_name}' missing 'broker' field")
-                for size in transaction_sizes:
-                    if size not in row:
-                        logger.warning(f"Row for {row['broker']} in '{table_name}' missing size '{size}'")
 
-        logger.info(f"✅ Successfully generated comparison tables for {len(result.get('etfs', []))} brokers")
+        # Validation - Response should be grouped by exchanges (like "euronext_brussels", "usa", etc.)
+        logger.info(f"🔍 Validating response structure...")
+
+        if not isinstance(result, dict):
+            raise ValueError("Response must be a JSON object")
+
+        # Expected exchanges - at least one should be present
+        found_exchanges = []
+        total_broker_entries = 0
+
+        for exchange_key, exchange_data in result.items():
+            if isinstance(exchange_data, dict):
+                found_exchanges.append(exchange_key)
+
+                # Check if this exchange has the expected structure
+                if "stocks" in exchange_data or "etfs" in exchange_data:
+                    logger.info(f"✅ Found valid exchange data for: {exchange_key}")
+
+                    # Count and validate broker entries
+                    for asset_type in ["stocks", "etfs"]:
+                        if asset_type in exchange_data and isinstance(exchange_data[asset_type], list):
+                            total_broker_entries += len(exchange_data[asset_type])
+
+                            # Validate each row has broker field
+                            for row in exchange_data[asset_type]:
+                                if not isinstance(row, dict) or "broker" not in row:
+                                    logger.warning(f"Invalid row structure in {exchange_key}.{asset_type}")
+                                    continue
+
+                                # Check for transaction sizes (optional validation)
+                                transaction_sizes = ["250", "500", "1000", "1500", "2000", "2500", "5000", "10000", "50000"]
+                                missing_sizes = [size for size in transaction_sizes if size not in row]
+                                if missing_sizes:
+                                    logger.warning(f"Row for {row.get('broker', 'unknown')} in '{exchange_key}.{asset_type}' missing sizes: {missing_sizes}")
+
+        if not found_exchanges:
+            raise ValueError("No valid exchange data found in response")
+
+        logger.info(f"✅ Successfully generated comparison tables for {len(found_exchanges)} exchanges with {total_broker_entries} broker entries")
+
+        # Save the JSON response to output directory
+        output_dir = _default_output_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create filename with timestamp and model name
+        from datetime import datetime
+        output_path = output_dir / f"cost_comparison_tables.json"
+
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+            logger.info(f"💾 Saved cost comparison tables to: {output_path}")
+        except Exception as save_error:
+            logger.warning(f"⚠️  Failed to save JSON response to file: {save_error}")
 
         # Cache the result
         llm_cache.set(cache_key, result)
@@ -508,7 +625,7 @@ def generate_financial_analysis(
             return cached
 
     # ... (existing logic continues)
-    cost_data = _get_cost_analysis_data()
+    cost_data = _get_cost_comparison_data()
 
     # Extract broker names
     broker_names = [name for name in cost_data.keys() if "error" not in cost_data.get(name, {})]
@@ -541,67 +658,93 @@ Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize ha
     # Create explicit list of all brokers
     broker_list = ", ".join(broker_names)
 
+    # Get current date for the analysis
+    from datetime import datetime
+    current_date = datetime.now().strftime('%B %d, %Y')
+
     user_prompt = f"""Generate a comprehensive financial analysis comparing ALL Belgian investment brokers.
 
-CRITICAL: You MUST include ALL {len(broker_names)} brokers in your analysis:
-{broker_list}
+    CRITICAL: You MUST include ALL {len(broker_names)} brokers in your analysis:
+    {broker_list}
 
-BROKER DATA:
-{json.dumps(cost_data, indent=2)}
+    BROKER DATA:
+    {json.dumps(cost_data, indent=2)}
 
-Return a SIMPLE JSON object with this structure (KEEP ALL STRINGS SHORT - MAX 150 CHARS):
+    ### CALCULATION RULES (STRICT):
+    1. **Total Cost of Ownership (TCO)**: You MUST add ALL hidden fees to the transaction cost:
+       - **Handling Fees**: e.g., Degiro's €1.00 per trade.
+       - **Connectivity Fees**: e.g., Degiro's €2.50/year (amortize or add to annual totals).
+       - **Custody Fees**: e.g., ING's % fee per month.
+       - **Service Fees**: Any fixed monthly platform fees (e.g., Keytrade Pro if applicable, though usually free).
+    2. **Profiles for Annual Cost**:
+       - **Passive Investor (monthly500ETF)**: Buys €500 of ETFs once per month (12 trades/year). *Assumption: Core Selection if available, otherwise standard.*
+       - **Active Trader**: Buys €2,500 of Stocks 10 times/month + €10,000 of Stocks 2 times/month (144 trades/year).
 
-{{
-  "metadata": {{
-    "title": "Short catchy title (max 80 chars)",
-    "subtitle": "Key insight (max 100 chars)",
-    "publishDate": "{datetime.now().strftime('%B %d, %Y')}",
-    "readingTimeMinutes": 12
-  }},
-  "executiveSummary": [
-    "Finding 1 (max 150 chars)",
-    "Finding 2 (max 150 chars)",
-    "Finding 3 (max 150 chars)",
-    "Finding 4 (max 150 chars)"
-  ],
-  "brokerComparisons": [
+    ### OUTPUT STRUCTURE
+    Return a SIMPLE JSON object. Keep all text strings short (max 150 chars).
+
     {{
-      "broker": "DEGIRO Belgium",
-      "overallRating": 5,
-      "etfRating": 5,
-      "stockRating": 5,
-      "bondRating": 4,
-      "pros": ["Pro 1", "Pro 2", "Pro 3"],
-      "cons": ["Con 1", "Con 2"],
-      "bestFor": ["Use case 1", "Use case 2"]
-    }},
-    ...repeat for ALL {len(broker_names)} brokers
-  ],
-  "categoryWinners": {{
-    "etfs": {{"winner": "Broker name", "reason": "Short reason"}},
-    "stocks": {{"winner": "Broker name", "reason": "Short reason"}},
-    "bonds": {{"winner": "Broker name", "reason": "Short reason"}},
-    "overall": {{"winner": "Broker name", "reason": "Short reason"}}
-  }},
-  "costComparison": {{
-    "monthly500ETF": [
-      {{"broker": "DEGIRO Belgium", "annualCost": 0}},
-      ...all {len(broker_names)} brokers
-    ],
-    "activeTrader": [
-      {{"broker": "DEGIRO Belgium", "annualCost": 100}},
-      ...all {len(broker_names)} brokers
-    ]
-  }}
-}}
+      "metadata": {{
+        "title": "Short catchy title (max 80 chars)",
+        "subtitle": "Key insight (max 100 chars)",
+        "publishDate": "{current_date}",
+        "readingTimeMinutes": 12
+      }},
+      "executiveSummary": [
+        "Finding 1 (max 150 chars)",
+        "Finding 2 (max 150 chars)",
+        "Finding 3 (max 150 chars)"
+      ],
+      "brokerComparisons": [
+        {{
+          "broker": "Name",
+          "overallRating": 5,
+          "etfRating": 5,
+          "stockRating": 5,
+          "pros": ["Pro 1", "Pro 2"],
+          "cons": ["Con 1", "Con 2"],
+          "bestFor": ["Buy & Hold", "Day Trading"]
+        }}
+        // ... Repeat for ALL brokers
+      ],
+      "cheapestPerTier": {{
+        "stocks": {{
+          "250": "Broker Name (€Cost)",
+          "2500": "Broker Name (€Cost)",
+          "10000": "Broker Name (€Cost)",
+          "50000": "Broker Name (€Cost)"
+        }},
+        "etfs": {{
+          "500": "Broker Name (€Cost)",
+          "5000": "Broker Name (€Cost)"
+        }}
+      }},
+      "costComparison": {{
+        "passiveInvestor": [
+          {{"broker": "Name", "annualCost": 0, "rank": 1}},
+          // ... All brokers sorted by cost
+        ],
+        "activeTrader": [
+          {{"broker": "Name", "annualCost": 100, "rank": 1}},
+          // ... All brokers sorted by cost
+        ]
+      }},
+      "costEvidence": {{
+        "passiveInvestor": {{
+          "Broker Name": "12 x (€0 fee + €1 handling) + €0 custody = €12/yr",
+          "Another Broker": "12 x €5 fee = €60/yr"
+        }},
+        "activeTrader": {{
+          "Broker Name": "120x(€3) + 24x(€10) + €2.50 conn = €602.50/yr"
+        }}
+      }}
+    }}
 
-CRITICAL RULES:
-1. Keep EVERY string under 150 characters
-2. Use simple arrays, not nested objects
-3. Include ALL {len(broker_names)} brokers in brokerComparisons
-4. Include ALL {len(broker_names)} brokers in costComparison arrays
-5. Return ONLY valid JSON - no markdown, no code blocks
-6. Ensure all brackets close properly"""
+    CRITICAL OUTPUT RULES:
+    1. **Valid JSON Only**: No markdown formatting.
+    2. **All Brokers**: Every list must contain exactly {len(broker_names)} entries.
+    3. **Math Check**: Verify your "Active Trader" sums. (e.g. if fee is €3/trade, annual is ~€432, not €50).
+    """
 
     try:
         logger.info(f"📊 Generating structured financial analysis using {model}...")
@@ -632,22 +775,63 @@ CRITICAL RULES:
             else:
                 raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
 
-        # Validate required keys for simplified structure
-        required_keys = ["metadata", "executiveSummary", "brokerComparisons", "categoryWinners", "costComparison"]
-        for key in required_keys:
-            if key not in result:
-                logger.warning(f"⚠️ Missing key in response: {key}")
+        # Validation - The response should be grouped by exchanges
+        logger.info(f"🔍 Validating response structure...")
 
-        # Validate that all brokers are included
-        if "brokerComparisons" in result:
-            included_brokers = [b.get("broker", "") for b in result["brokerComparisons"]]
-            missing_brokers = [b for b in broker_names if b not in included_brokers]
-            if missing_brokers:
-                logger.warning(f"⚠️ Missing brokers in response: {', '.join(missing_brokers)}")
-                logger.warning(f"   Expected {len(broker_names)} brokers, got {len(included_brokers)}")
+        if not isinstance(result, dict):
+            raise ValueError("Response must be a JSON object")
 
-        logger.info(f"✅ Financial analysis generated successfully")
-        logger.info(f"   Brokers included: {len(result.get('brokerComparisons', []))}/{len(broker_names)}")
+        # Expected exchanges - at least one should be present
+        found_exchanges = []
+        total_broker_entries = 0
+
+        for exchange_key, exchange_data in result.items():
+            if isinstance(exchange_data, dict):
+                found_exchanges.append(exchange_key)
+
+                # Check if this exchange has the expected structure
+                if "stocks" in exchange_data or "etfs" in exchange_data:
+                    logger.info(f"✅ Found valid exchange data for: {exchange_key}")
+
+                    # Count and validate broker entries
+                    for asset_type in ["stocks", "etfs"]:
+                        if asset_type in exchange_data and isinstance(exchange_data[asset_type], list):
+                            total_broker_entries += len(exchange_data[asset_type])
+
+                            # Validate each row has broker field
+                            for row in exchange_data[asset_type]:
+                                if not isinstance(row, dict) or "broker" not in row:
+                                    logger.warning(f"Invalid row structure in {exchange_key}.{asset_type}")
+                                    continue
+
+                                # Check for transaction sizes (optional validation)
+                                transaction_sizes = ["250", "500", "1000", "1500", "2000", "2500", "5000", "10000", "50000"]
+                                missing_sizes = [size for size in transaction_sizes if size not in row]
+                                if missing_sizes:
+                                    logger.warning(f"Row for {row.get('broker', 'unknown')} in '{exchange_key}.{asset_type}' missing sizes: {missing_sizes}")
+
+        if not found_exchanges:
+            raise ValueError("No valid exchange data found in response")
+
+        logger.info(f"✅ Successfully generated comparison tables for {len(found_exchanges)} exchanges with {total_broker_entries} broker entries")
+
+        # Save the JSON response to output directory
+        output_dir = _default_output_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create filename with timestamp and model name
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_model_name = re.sub(r'[^\w\-.]', '_', model)
+        output_filename = f"financial_analysis_{safe_model_name}_{timestamp}.json"
+        output_path = output_dir / output_filename
+
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+            logger.info(f"💾 Saved financial analysis to: {output_path}")
+        except Exception as save_error:
+            logger.warning(f"⚠️  Failed to save JSON response to file: {save_error}")
 
         # Cache the result
         llm_cache.set(cache_key, result)
@@ -655,11 +839,14 @@ CRITICAL RULES:
 
         return result
 
-    except HTTPException:
-        raise
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ JSON parsing failed: {e}")
+        logger.error(f"Response was: {response_text[:500]}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
     except Exception as e:
         logger.error(f"❌ Failed to generate financial analysis: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate financial analysis: {e}")
+
 
 
 @app.get("/brokers")
@@ -743,6 +930,43 @@ def _default_pdf_text_dir() -> Path:
     repo_root = Path(__file__).resolve().parents[3]
     fallback = repo_root / "data" / "output" / "pdf_text"
     return fallback
+
+
+def _clear_pdf_text_dir(directory: Path, keep: Optional[List[str]] = None) -> None:
+    """
+    Remove all files and subdirectories in the PDF text directory.
+    Optionally keep files named in `keep` (e.g. ['.gitkeep']).
+    """
+    if not directory.exists():
+        return
+
+    keep_set = set(keep or [])
+    removed_count = 0
+
+    try:
+        for child in directory.iterdir():
+            try:
+                if child.name in keep_set:
+                    continue
+
+                if child.is_dir():
+                    shutil.rmtree(child)
+                    logger.info(f"🗑️  Removed directory: {child.name}")
+                else:
+                    child.unlink()
+                    logger.info(f"🗑️  Removed file: {child.name}")
+                removed_count += 1
+
+            except Exception as exc:
+                logger.warning(f"⚠️  Failed to remove {child}: {exc}")
+
+        if removed_count > 0:
+            logger.info(f"✅ Cleared {removed_count} old items from PDF text directory")
+        else:
+            logger.info("📂 PDF text directory was already empty")
+
+    except Exception as exc:
+        logger.error(f"❌ Error clearing PDF text directory: {exc}")
 
 
 @app.get("/cost-analysis/{broker_name}")
@@ -835,8 +1059,12 @@ def refresh_and_analyze(
 
     logger.info(f"📋 Processing {len(brokers_list)} broker(s): {', '.join(b.name for b in brokers_list)}")
 
-    # Step 2: Refresh PDFs and extract text
+    # Step 2: Clear old PDF text files and prepare output directory
     output_dir = _default_pdf_text_dir()
+
+    logger.info("🧹 Clearing old PDF text files...")
+    _clear_pdf_text_dir(output_dir, keep=[".gitkeep"])
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"📥 Downloading PDFs and extracting text to: {output_dir}")
@@ -847,6 +1075,8 @@ def refresh_and_analyze(
             brokers=brokers_list,
             force=force,
             pdf_text_dump_dir=output_dir,
+            use_llm=True,
+            llm_model=model,
         )
 
         refresh_duration = time.time() - refresh_start

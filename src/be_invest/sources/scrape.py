@@ -7,14 +7,12 @@ helpers and does not include site-specific parsers.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
-from html.parser import HTMLParser
-from typing import List, Optional, Callable, Dict, Tuple
+from typing import List, Optional, Tuple
 import logging
-import time
 import re
 import hashlib
+from urllib.parse import urljoin
 
 try:  # Prefer requests when available, but keep stdlib fallback
     import requests  # type: ignore
@@ -24,7 +22,6 @@ except Exception:  # pragma: no cover - optional dependency
     HTTPError = RequestException = Exception # type: ignore
 
 from ..models import Broker, FeeRecord
-from ..fetchers import Fetcher
 from .llm_extract import extract_fee_records_via_llm
 
 logger = logging.getLogger(__name__)
@@ -131,6 +128,28 @@ def _fetch_url_with_playwright(url: str, timeout: float = 10.0) -> Tuple[Optiona
         return None, error_msg
 
 
+def _extract_pdf_links_from_html(html: str, base_url: Optional[str] = None) -> List[str]:
+    """Find PDF links in HTML and return resolved absolute URLs.
+
+    Looks for <a>, <iframe>, <embed> and simple href/src occurrences that reference .pdf.
+    """
+    links: List[str] = []
+    try:
+        # Simple regex to find href/src values ending/containing .pdf
+        # This is intentionally permissive to catch common patterns.
+        for match in re.findall(r"(?:href|src)=[\"']([^\"']+\.pdf[^\"']*)[\"']", html, flags=re.IGNORECASE):
+            resolved = urljoin(base_url or "", match)
+            links.append(resolved)
+
+        # Fallback: look for bare URLs ending with .pdf
+        for match in re.findall(r"https?://[^\s'\"<>]+\.pdf(?:\?[^\s'\"<>]*)?", html, flags=re.IGNORECASE):
+            if match not in links:
+                links.append(match)
+    except Exception:
+        pass
+    return links
+
+
 def scrape_fee_records(
     brokers: List[Broker], *, force: bool = False, timeout: float = 10.0, pdf_text_dump_dir: Optional[Path] = None,
     use_llm: bool = False, llm_model: str = "gpt-4o", llm_cache_dir: Optional[Path] = None,
@@ -149,10 +168,10 @@ def scrape_fee_records(
         for ds in broker.data_sources:
             if not ds.url or (ds.allowed_to_scrape is False and not force):
                 continue
-            
-            is_pdf = ds.url.lower().endswith('.pdf')
+
+            is_pdf = bool(getattr(ds, "type", "").lower() == "pdf") or getattr(ds, "url", "").lower().endswith('.pdf')
             is_webpage = ds.type == "webpage" or (not is_pdf and ds.url.startswith('http'))
-            
+
             # Skip non-PDF, non-webpage sources
             if not is_pdf and not is_webpage:
                 logger.info("Skipping unknown source type for %s: %s", broker.name, ds.url)
@@ -188,7 +207,7 @@ def scrape_fee_records(
                         out_path = pdf_text_dump_dir / text_filename
                         out_path.write_text(text, encoding="utf-8")
                         logger.info("Saved extracted PDF text to %s", out_path)
-                    
+
                     if use_llm and text.strip():
                         llm_rows = extract_fee_records_via_llm(
                             text, broker=broker.name, source_url=ds.url, model=llm_model,
@@ -197,6 +216,16 @@ def scrape_fee_records(
                         )
                         all_records.extend(llm_rows)
                         logger.info("LLM extracted %d records for %s.", len(llm_rows), broker.name)
+                    elif ds.use_llm and text.strip():
+                        # Check individual data source use_llm flag
+                        logger.info("Using LLM for data source with use_llm=True: %s", broker.name)
+                        llm_rows = extract_fee_records_via_llm(
+                            text, broker=broker.name, source_url=ds.url, model=llm_model,
+                            llm_cache_dir=llm_cache_dir, max_output_tokens=llm_max_tokens,
+                            temperature=llm_temperature, strict_mode=strict_parse
+                        )
+                        all_records.extend(llm_rows)
+                        logger.info("LLM extracted %d records for %s via data source flag.", len(llm_rows), broker.name)
 
                 except Exception as exc:
                     logger.error("PDF processing failed for %s", broker.name, exc_info=True)
@@ -211,16 +240,68 @@ def scrape_fee_records(
                     except Exception:
                         html_str = raw_bytes.decode('latin-1', errors='ignore')
 
+                    # Normalized safe names (always define these so linked-PDF handling can use them)
+                    safe_broker_name = re.sub(r'[\s/]+', '_', broker.name)
+                    safe_desc = re.sub(r'[\s/]+', '_', ds.description or 'document')
+
                     # Save HTML content to text file (same as PDF)
                     if pdf_text_dump_dir and html_str.strip():
                         pdf_text_dump_dir.mkdir(parents=True, exist_ok=True)
-                        safe_broker_name = re.sub(r'[\s/]+', '_', broker.name)
-                        safe_desc = re.sub(r'[\s/]+', '_', ds.description or 'document')
                         url_hash = hashlib.md5(ds.url.encode()).hexdigest()[:8]
                         text_filename = f"{safe_broker_name}_{safe_desc}_{url_hash}.txt"
                         out_path = pdf_text_dump_dir / text_filename
                         out_path.write_text(html_str, encoding="utf-8")
                         logger.info("Saved extracted webpage text to %s", out_path)
+
+                    # If the page contains links to PDFs, fetch and process those PDFs as well
+                    pdf_links = _extract_pdf_links_from_html(html_str, base_url=ds.url)
+                    if pdf_links:
+                        logger.info("Found %d PDF link(s) on page for %s; attempting to fetch them...", len(pdf_links), broker.name)
+                        for pl in pdf_links:
+                            try:
+                                pdf_bytes, pdf_err = _fetch_url(pl, timeout=timeout)
+                                if not pdf_bytes:
+                                    logger.warning("Failed to fetch linked PDF %s for %s: %s", pl, broker.name, pdf_err)
+                                    continue
+
+                                if pdf_bytes.startswith(b"%PDF"):
+                                    logger.info("Processing linked PDF %s for %s (%d bytes)", pl, broker.name, len(pdf_bytes))
+                                    try:
+                                        from pdfminer.high_level import extract_text
+                                        from io import BytesIO
+                                        linked_text = extract_text(BytesIO(pdf_bytes)) or ""
+
+                                        if pdf_text_dump_dir and linked_text.strip():
+                                            url_hash2 = hashlib.md5(pl.encode()).hexdigest()[:8]
+                                            linked_filename = f"{safe_broker_name}_{safe_desc}_{url_hash2}.txt"
+                                            linked_out = pdf_text_dump_dir / linked_filename
+                                            linked_out.write_text(linked_text, encoding="utf-8")
+                                            logger.info("Saved extracted linked PDF text to %s", linked_out)
+
+                                        # Extract fee records from linked PDF using LLM if requested
+                                        if use_llm and linked_text.strip():
+                                            llm_rows = extract_fee_records_via_llm(
+                                                linked_text, broker=broker.name, source_url=pl, model=llm_model,
+                                                llm_cache_dir=llm_cache_dir, max_output_tokens=llm_max_tokens,
+                                                temperature=llm_temperature, strict_mode=strict_parse
+                                            )
+                                            all_records.extend(llm_rows)
+                                            logger.info("LLM extracted %d records from linked PDF for %s.", len(llm_rows), broker.name)
+                                        elif ds.use_llm and linked_text.strip():
+                                            llm_rows = extract_fee_records_via_llm(
+                                                linked_text, broker=broker.name, source_url=pl, model=llm_model,
+                                                llm_cache_dir=llm_cache_dir, max_output_tokens=llm_max_tokens,
+                                                temperature=llm_temperature, strict_mode=strict_parse
+                                            )
+                                            all_records.extend(llm_rows)
+                                            logger.info("LLM extracted %d records from linked PDF for %s via ds.use_llm.", len(llm_rows), broker.name)
+
+                                    except Exception as exc:
+                                        logger.error("Linked PDF processing failed for %s (%s)", broker.name, pl, exc_info=True)
+                                else:
+                                    logger.warning("Linked resource is not a PDF (or invalid PDF header): %s", pl)
+                            except Exception as e:
+                                logger.exception("Error fetching/processing linked PDF %s for %s", pl, broker.name)
 
                     # Use LLM to extract fee records from HTML content
                     if use_llm and html_str.strip():
@@ -232,6 +313,16 @@ def scrape_fee_records(
                         )
                         all_records.extend(llm_rows)
                         logger.info("LLM extracted %d records for %s from webpage.", len(llm_rows), broker.name)
+                    elif ds.use_llm and html_str.strip():
+                        # Check individual data source use_llm flag
+                        logger.info("Using LLM for webpage with use_llm=True: %s", broker.name)
+                        llm_rows = extract_fee_records_via_llm(
+                            html_str, broker=broker.name, source_url=ds.url, model=llm_model,
+                            llm_cache_dir=llm_cache_dir, max_output_tokens=llm_max_tokens,
+                            temperature=llm_temperature, strict_mode=strict_parse
+                        )
+                        all_records.extend(llm_rows)
+                        logger.info("LLM extracted %d records for %s from webpage via data source flag.", len(llm_rows), broker.name)
                     else:
                         logger.warning("Webpage source requires use_llm=True for %s", broker.name)
 
@@ -244,3 +335,4 @@ def scrape_fee_records(
     unique_records = list(dict.fromkeys(all_records))
     logger.info("Returning %d unique records.", len(unique_records))
     return unique_records
+

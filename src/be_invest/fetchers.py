@@ -172,7 +172,23 @@ class Fetcher:
                 with sync_playwright() as p:
                     browser = p.chromium.launch(headless=True)
                     logger.debug("Browser launched, creating context...")
-                    context = browser.new_context(user_agent=self.headers["User-Agent"])
+
+                    # Set Belgium-specific context for Revolut
+                    context_options = {
+                        "user_agent": self.headers["User-Agent"],
+                    }
+
+                    # For Revolut, set Belgium locale and geolocation
+                    if "revolut.com" in url.lower():
+                        context_options.update({
+                            "locale": "en-BE",  # English (Belgium)
+                            "timezone_id": "Europe/Brussels",
+                            "geolocation": {"latitude": 50.8503, "longitude": 4.3517},  # Brussels coordinates
+                            "permissions": ["geolocation"]
+                        })
+                        logger.debug("Using Belgium-specific context for Revolut")
+
+                    context = browser.new_context(**context_options)
                     page = context.new_page()
                     logger.debug("Navigating to %s", url)
 

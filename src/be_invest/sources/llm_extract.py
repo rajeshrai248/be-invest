@@ -28,10 +28,32 @@ except ImportError:  # pragma: no cover
 from ..models import FeeRecord
 from ..cache import SimpleCache
 
+# Import enhanced prompt functions
+try:
+    import sys
+    from pathlib import Path
+
+    # Add project root to path for imports
+    project_root = Path(__file__).parent.parent.parent.parent
+    sys.path.insert(0, str(project_root))
+
+    from tests.enhanced_llm_prompts import (
+        create_enhanced_prompt,
+        create_focused_text_for_extraction,
+        validate_enhanced_extraction_result,
+        create_broker_specific_validation_rules,
+        ENHANCED_SYSTEM_PROMPT
+    )
+    ENHANCED_PROMPTS_AVAILABLE = True
+except ImportError as e:
+    ENHANCED_PROMPTS_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.debug(f"Enhanced prompts not available: {e}")
+
 logger = logging.getLogger(__name__)
 
 
-PROMPT_SYSTEM = (
+PROMPT_SYSTEM = ENHANCED_SYSTEM_PROMPT if ENHANCED_PROMPTS_AVAILABLE else (
     "You are a meticulous extraction engine. Return ONLY a JSON array of fee objects. "
     "Never include commentary. Never invent numbers. If a value is absent, use null. Choose ONE instrument_type from the allowed set."
 )
@@ -60,6 +82,16 @@ HEADER_KEYWORDS = [
 
 
 def _make_prompt(broker: str, source_url: str, text: str) -> List[Dict[str, str]]:
+    """Create extraction prompt, using enhanced version if available."""
+
+    # Use enhanced prompts if available
+    if ENHANCED_PROMPTS_AVAILABLE:
+        try:
+            return create_enhanced_prompt(broker, source_url, text)
+        except Exception as e:
+            logger.warning(f"Enhanced prompt failed for {broker}: {e}, falling back to basic prompt")
+
+    # Fallback to original prompt
     example = {
         "broker": broker,
         "instrument_type": "Equities",
@@ -197,39 +229,109 @@ def extract_fee_records_via_llm(
         logger.info("%s not configured or SDK missing; skipping LLM extraction.", provider.title())
         return []
 
+    # Debug: Log extraction parameters
+    logger.debug("🤖 LLM EXTRACTION DEBUG - Parameters:")
+    logger.debug(f"   Broker: {broker}")
+    logger.debug(f"   Model: {model} ({provider})")
+    logger.debug(f"   Source URL: {source_url}")
+    logger.debug(f"   Text length: {len(text)} chars")
+    logger.debug(f"   Temperature: {temperature}")
+    logger.debug(f"   Max tokens: {max_output_tokens}")
+    logger.debug(f"   Focus fee lines: {focus_fee_lines}")
+
     cache = SimpleCache(Path(llm_cache_dir), ttl_seconds=0) if llm_cache_dir else None
     cache_key = f"llm:{model}:{broker}:{_hash_key(text, model, broker)}"
 
     if cache and cache.get(cache_key):
+        logger.debug("📦 Cache hit - returning cached results")
         try:
             cached_data = json.loads(cache.get(cache_key).decode("utf-8"))
             return [r for r in (_coerce_record(o) for o in cached_data) if r]
         except Exception:
+            logger.debug("❌ Cache read failed, proceeding with LLM call")
             pass  # Cache miss
 
     client: Any = Anthropic(api_key=api_key) if provider == "anthropic" else OpenAI(api_key=api_key)
     raw_text = text.strip()
     chunks = _split_semantic_chunks(raw_text, chunk_chars, max_chunks) if len(raw_text) > chunk_chars else [raw_text]
 
+    logger.debug(f"📄 Text processing: {len(chunks)} chunks (max {chunk_chars} chars each)")
+
     all_records: List[FeeRecord] = []
     for idx, chunk in enumerate(chunks):
+        logger.debug(f"\n🔍 Processing chunk {idx + 1}/{len(chunks)}")
+        logger.debug(f"   Original chunk length: {len(chunk)} chars")
+
         if focus_fee_lines:
-            fee_lines = [
-                ln.strip() for ln in chunk.splitlines()
-                if any(sym in ln.lower() for sym in ["%", "eur", "€", "usd"]) or
-                   any(k in ln.lower() for k in ["commission", "tarif", "fee", "kosten", "pricing"])
-            ]
-            unique_fee = list(dict.fromkeys(fee_lines))[:max_focus_lines]
-            focused_text = "\n".join(unique_fee) if unique_fee else chunk
+            if ENHANCED_PROMPTS_AVAILABLE:
+                logger.debug("   Using enhanced prompt focusing...")
+                try:
+                    focused_text = create_focused_text_for_extraction(chunk, max_focus_lines)
+                    logger.debug(f"   Enhanced focusing: {len(chunk)} → {len(focused_text)} chars")
+                except Exception as e:
+                    logger.warning(f"Enhanced text focusing failed: {e}, using fallback")
+                    # Fallback to original logic
+                    fee_lines = [
+                        ln.strip() for ln in chunk.splitlines()
+                        if any(sym in ln.lower() for sym in ["%", "eur", "€", "usd"]) or
+                           any(k in ln.lower() for k in ["commission", "tarif", "fee", "kosten", "pricing"])
+                    ]
+                    unique_fee = list(dict.fromkeys(fee_lines))[:max_focus_lines]
+                    focused_text = "\n".join(unique_fee) if unique_fee else chunk
+                    logger.debug(f"   Fallback focusing: found {len(fee_lines)} fee lines, using {len(unique_fee)} unique lines")
+            else:
+                logger.debug("   Using original fee line focusing...")
+                # Original logic
+                fee_lines = [
+                    ln.strip() for ln in chunk.splitlines()
+                    if any(sym in ln.lower() for sym in ["%", "eur", "€", "usd"]) or
+                       any(k in ln.lower() for k in ["commission", "tarif", "fee", "kosten", "pricing"])
+                ]
+                unique_fee = list(dict.fromkeys(fee_lines))[:max_focus_lines]
+                focused_text = "\n".join(unique_fee) if unique_fee else chunk
+                logger.debug(f"   Original focusing: found {len(fee_lines)} fee lines, using {len(unique_fee)} unique lines")
         else:
             focused_text = chunk
+            logger.debug("   No focusing applied")
+
+        logger.debug(f"   Final focused text length: {len(focused_text)} chars")
 
         messages = _make_prompt(broker, source_url, focused_text)
         system_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
         user_prompt = next((m["content"] for m in messages if m["role"] == "user"), "")
 
+        # Debug: Log the actual prompts being sent (without the large text content)
+        logger.debug("\n🎯 LLM PROMPT DEBUG:")
+        logger.debug("=" * 80)
+        logger.debug(f"📝 SYSTEM PROMPT ({len(system_prompt)} chars):")
+        logger.debug(f"   {system_prompt[:200]}...")  # First 200 chars only
+
+        logger.debug(f"\n👤 USER PROMPT STRUCTURE ({len(user_prompt)} chars):")
+        # Log prompt structure without the actual text content
+        prompt_lines = user_prompt.split('\n')
+        logger.debug("   Prompt sections:")
+        for i, line in enumerate(prompt_lines[:20]):  # First 20 lines only
+            if line.strip():
+                if any(keyword in line.lower() for keyword in ['extract', 'broker', 'fee', 'commission', 'example']):
+                    logger.debug(f"     {i+1:2d}: {line[:100]}...")  # Key instruction lines
+                elif len(line) > 500:  # This is likely the text content
+                    logger.debug(f"     {i+1:2d}: [TEXT CONTENT - {len(line)} chars]")
+                    break
+
+        # Log enhanced prompt info if available
+        if ENHANCED_PROMPTS_AVAILABLE and broker:
+            logger.debug(f"\n🎯 ENHANCED PROMPT INFO:")
+            logger.debug(f"   Broker-specific instructions: Available")
+            logger.debug(f"   Enhanced validation: Enabled")
+            if broker == "Revolut":
+                logger.debug(f"   🇧🇪 Revolut-specific: Belgium-aware extraction enabled")
+
+        logger.debug("=" * 80)
+
         content = ""
         try:
+            logger.debug(f"🚀 Sending request to {provider.upper()} {model}...")
+
             if provider == "anthropic":
                 resp = client.messages.create(
                     model=model,
@@ -239,6 +341,7 @@ def extract_fee_records_via_llm(
                     max_tokens=max_output_tokens,
                 )
                 content = resp.content[0].text if resp.content else ""
+                logger.debug(f"✅ Anthropic response received: {len(content)} chars")
             else:  # openai
                 resp = client.chat.completions.create(
                     model=model,
@@ -248,28 +351,69 @@ def extract_fee_records_via_llm(
                     response_format={"type": "json_object"} if "json" in model else None,
                 )
                 content = resp.choices[0].message.content if resp.choices else ""
+                logger.debug(f"✅ OpenAI response received: {len(content)} chars")
+
+            # Debug: Log response structure (first part only)
+            logger.debug(f"\n📤 LLM RESPONSE PREVIEW:")
+            logger.debug(f"   Response length: {len(content)} chars")
+            if content:
+                response_preview = content[:300].replace('\n', ' ')
+                logger.debug(f"   Preview: {response_preview}...")
+
+                # Check if response looks like valid JSON
+                if content.strip().startswith('{') or content.strip().startswith('['):
+                    logger.debug("   Format: Appears to be JSON ✅")
+                else:
+                    logger.debug("   Format: May need JSON extraction ⚠️")
+            else:
+                logger.debug("   Content: Empty response ❌")
+
         except Exception as exc:
-            logger.info("%s extraction failed (chunk %d): %s", provider.title(), idx, exc)
+            logger.warning("%s extraction failed (chunk %d): %s", provider.title(), idx, exc)
             continue
 
         # Post-process and validate JSON
+        logger.debug(f"\n🔍 Processing LLM response...")
         try:
             parsed = json.loads(content)
-        except json.JSONDecodeError:
+            logger.debug(f"   JSON parsing: Success ✅")
+        except json.JSONDecodeError as e:
+            logger.debug(f"   JSON parsing failed: {e}")
+            logger.debug("   Attempting JSON extraction...")
             start, end = content.find("["), content.rfind("]")
             if start != -1 and end != -1:
                 try:
                     parsed = json.loads(content[start : end + 1])
+                    logger.debug(f"   JSON extraction: Success ✅")
                 except json.JSONDecodeError:
                     parsed = []
+                    logger.debug("   JSON extraction: Failed ❌")
             else:
                 parsed = []
+                logger.debug("   JSON extraction: No brackets found ❌")
 
         if isinstance(parsed, dict) and "results" in parsed:
             parsed = parsed.get("results", [])
+            logger.debug("   Extracted results from wrapper object")
         if not isinstance(parsed, list):
+            logger.debug(f"   Warning: Expected list, got {type(parsed)}")
             continue
 
+        logger.debug(f"   Raw extracted records: {len(parsed)}")
+
+        # Use enhanced validation if available
+        if ENHANCED_PROMPTS_AVAILABLE:
+            try:
+                validated = validate_enhanced_extraction_result(parsed)
+                valid_records = [r for r in (_coerce_record(o) for o in validated) if r]
+                all_records.extend(valid_records)
+                logger.debug(f"   Enhanced validation: {len(parsed)} → {len(valid_records)} valid records ✅")
+                continue
+            except Exception as e:
+                logger.warning(f"Enhanced validation failed: {e}, using fallback")
+
+        # Fallback to original validation
+        logger.debug("   Using fallback validation...")
         validated: List[Dict[str, Any]] = []
         for obj in parsed:
             if not isinstance(obj, dict):
@@ -296,11 +440,42 @@ def extract_fee_records_via_llm(
 
         all_records.extend(r for r in (_coerce_record(o) for o in validated) if r)
 
+    # Final debug summary
+    logger.debug(f"\n🎯 EXTRACTION SUMMARY:")
+    logger.debug(f"   Total records extracted: {len(all_records)}")
+
+    # Group records by instrument type for summary
+    if all_records:
+        instrument_counts = {}
+        for record in all_records:
+            instrument = record.instrument_type
+            instrument_counts[instrument] = instrument_counts.get(instrument, 0) + 1
+
+        logger.debug("   Records by instrument type:")
+        for instrument, count in instrument_counts.items():
+            logger.debug(f"     {instrument}: {count}")
+
+        # Show sample of extracted records (without full details)
+        logger.debug("   Sample extracted records:")
+        for i, record in enumerate(all_records[:3]):  # First 3 records only
+            logger.debug(f"     {i+1}. {record.instrument_type} - {record.order_channel}")
+            if record.base_fee:
+                logger.debug(f"        Base fee: €{record.base_fee}")
+            if record.variable_fee:
+                logger.debug(f"        Variable fee: {record.variable_fee}")
+    else:
+        logger.debug("   No valid records extracted ❌")
+
     deduped = list(dict.fromkeys(all_records))
+    logger.debug(f"   After deduplication: {len(deduped)} unique records")
 
     if cache:
         try:
             cache.put(cache_key, json.dumps([asdict(x) for x in deduped]).encode("utf-8"))
-        except Exception:
+            logger.debug("   Results cached ✅")
+        except Exception as e:
+            logger.debug(f"   Cache save failed: {e}")
             pass
+
+    logger.debug("🏁 LLM extraction completed\n")
     return deduped

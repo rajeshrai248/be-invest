@@ -26,6 +26,7 @@ def load_brokers_from_yaml(path: Path) -> List[Broker]:
                 description=source.get("description", ""),
                 url=source.get("url"),
                 allowed_to_scrape=source.get("allowed_to_scrape"),
+                use_llm=source.get("use_llm"),  # Add use_llm field
                 notes=source.get("notes"),
             )
             for source in entry.get("data_sources", [])

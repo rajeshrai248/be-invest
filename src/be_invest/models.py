@@ -13,6 +13,7 @@ class DataSource:
     description: str
     url: Optional[str] = None
     allowed_to_scrape: Optional[bool] = None
+    use_llm: Optional[bool] = None  # Whether to use LLM for extraction
     notes: Optional[str] = None
 
 

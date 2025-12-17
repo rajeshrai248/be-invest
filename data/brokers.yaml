@@ -75,7 +75,7 @@ brokers:
         selector: ""
         allowed_to_scrape: true
         description: "ING Group Newsroom"
-  - name: Belfius
+  - name: Rebel
     website: https://www.belfius.be/
     country: Belgium
     instruments:
@@ -84,10 +84,11 @@ brokers:
       - Funds
       - Bonds
     data_sources:
-      - type: pdf
+      - type: webpage
         description: Tariff schedule (MIFID)
-        url: https://www.belfius.be/imagingservlet/GetDocument?id=TARIFBELPART_NL&src=mifid
+        url: https://www.belfius.be/retail/nl/producten/sparen-beleggen/rebel/tarief/index.aspx
         allowed_to_scrape: false
+        notes: "Rebel is investment platform run and managed by Belfius"
     news_sources:
       - url: https://www.belfius.be/retail/nl/publicaties/actualiteit/index.aspx
         type: webpage
@@ -103,10 +104,21 @@ brokers:
       - Crypto
       - Commodities
     data_sources:
-      - type: webpage
-        description: Trading fees
-        url: https://help.revolut.com/help/wealth/stocks/trading-stocks/trading-fees/what-fees-will-i-be-charged-for-my-trading/
-        allowed_to_scrape: true  # ENABLED - uses Playwright to bypass 403 errors
+      - type: pdf
+        description: Ex-ante costs report ETFs
+        url: https://cdn.revolut.com/legal/terms/RSEUAB-ex-ante-costs-report-ETFs-v5.2-EN.pdf
+        allowed_to_scrape: true
+        use_llm: true
+      - type: pdf
+        description: Ex-ante costs report EEA stocks
+        url: https://cdn.revolut.com/legal/terms/RSEUAB-ex-ante-costs-report-EEA-stocks-v3.2-EN.pdf
+        allowed_to_scrape: true
+        use_llm: true
+      - type: pdf
+        description: Ex-ante costs report bonds
+        url: https://cdn.revolut.com/legal/terms/RSEUAB-ex-ante-costs-report-bonds-v3-EN.pdf
+        allowed_to_scrape: true
+        use_llm: true
     news_sources:
       - url: https://www.revolut.com/en-BE/news/
         type: webpage
