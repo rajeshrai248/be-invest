@@ -48,7 +48,7 @@ def extract_all_fee_records(
     brokers_yaml_path: Path,
     pdf_text_dir: Path,
     cache_dir: Path | None = None,
-    model: str = "gpt-4o",
+    model: str = "claude-sonnet-4-20250514",
     skip_llm: bool = False,
 ) -> list[FeeRecord]:
     """Extract fee records from all brokers by linking brokers.yaml to text files."""
@@ -124,7 +124,7 @@ def extract_all_fee_records(
 
 def generate_summary_via_llm(
     fee_records: list[FeeRecord],
-    model: str = "gpt-4o",
+    model: str = "claude-sonnet-4-20250514",
 ) -> str:
     """Generate a detailed summary of costs and charges using a specified LLM."""
     logger.info("--- Starting Summary Generation Stage ---")
@@ -201,7 +201,7 @@ def main():
     parser.add_argument("--pdf-text-dir", type=Path, default=DEFAULT_PDF_TEXT_DIR)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_DIR / "broker_summary.md")
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_DATA_DIR / "cache")
-    parser.add_argument("--model", type=str, default="gpt-4o", help="LLM to use (e.g., gpt-4o, claude-3-opus-20240229)")
+    parser.add_argument("--model", type=str, default="claude-sonnet-4-20250514", help="LLM to use (e.g., claude-sonnet-4-20250514, gpt-4o)")
     parser.add_argument("--extract-only", action="store_true")
     parser.add_argument("--skip-llm", action="store_true")
     parser.add_argument("--no-api", action="store_true")

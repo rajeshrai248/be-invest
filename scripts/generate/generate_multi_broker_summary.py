@@ -74,7 +74,7 @@ def infer_broker_from_filename(filename: str) -> Optional[str]:
     return None
 
 
-def extract_fees_with_gpt4o(text: str, broker_name: str, api_key: str, model: str = "gpt-4o") -> list[dict]:
+def extract_fees_with_gpt4o(text: str, broker_name: str, api_key: str, model: str = "claude-sonnet-4-20250514") -> list[dict]:
     """Extract fees using GPT-4o.
 
     Args:
@@ -165,7 +165,7 @@ Extract ALL fee tiers and structures. Be thorough. Return valid JSON only."""
         return []
 
 
-def generate_multi_broker_summary(brokers: list[Broker], fee_records: list[dict], api_key: str, model: str = "gpt-4o") -> str:
+def generate_multi_broker_summary(brokers: list[Broker], fee_records: list[dict], api_key: str, model: str = "claude-sonnet-4-20250514") -> str:
     """Generate comprehensive multi-broker summary using GPT-4o.
 
     Args:
@@ -327,8 +327,8 @@ Examples:
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o",
-        help="OpenAI model (default: gpt-4o)",
+        default="claude-sonnet-4-20250514",
+        help="LLM model (default: claude-sonnet-4-20250514)",
     )
     parser.add_argument(
         "--api-key-env",

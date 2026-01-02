@@ -91,7 +91,7 @@ def load_pdf_texts_for_brokers(brokers: list[Broker], text_dir: Path) -> dict[st
     return texts
 
 
-def analyze_broker_costs_with_llm(broker_name: str, texts: list[dict], api_key: str, model: str = "gpt-4o") -> dict:
+def analyze_broker_costs_with_llm(broker_name: str, texts: list[dict], api_key: str, model: str = "claude-sonnet-4-20250514") -> dict:
     """Analyze broker costs using a specified LLM (OpenAI or Anthropic)."""
     if not texts:
         return {"error": "No text data provided"}
@@ -192,7 +192,7 @@ Return ONLY a valid JSON object.
         return {"error": str(e)}
 
 
-def generate_comprehensive_summary(brokers: list[Broker], pdf_texts: dict[str, list], api_key: str, model: str = "gpt-4o") -> tuple[str, dict]:
+def generate_comprehensive_summary(brokers: list[Broker], pdf_texts: dict[str, list], api_key: str, model: str = "claude-sonnet-4-20250514") -> tuple[str, dict]:
     """Generate comprehensive summary for all brokers."""
     all_analyses = {}
 
@@ -231,7 +231,7 @@ def main():
     parser.add_argument("--brokers", type=Path, default=DEFAULT_BROKERS_PATH)
     parser.add_argument("--pdf-text-dir", type=Path, default=DEFAULT_PDF_TEXT_DIR)
     parser.add_argument("--output", type=Path, default=DEFAULT_SUMMARY_FILE)
-    parser.add_argument("--model", type=str, default="gpt-4o", help="LLM model to use (default: gpt-4o). For Claude use: claude-sonnet-4-20250514")
+    parser.add_argument("--model", type=str, default="claude-sonnet-4-20250514", help="LLM model to use (default: claude-sonnet-4-20250514). For OpenAI use: gpt-4o")
     parser.add_argument("--api-key-env", type=str, default="OPENAI_API_KEY")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
     parser.add_argument("--json-only", action="store_true")

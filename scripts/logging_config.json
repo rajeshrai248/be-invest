@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "detailed": {
+      "format": "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S"
+    },
+    "simple": {
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S"
+    }
+  },
+  "handlers": {
+    "default": {
+      "formatter": "detailed",
+      "class": "logging.StreamHandler",
+      "stream": "ext://sys.stderr"
+    },
+    "access": {
+      "formatter": "detailed",
+      "class": "logging.StreamHandler",
+      "stream": "ext://sys.stdout"
+    },
+    "file": {
+      "formatter": "detailed",
+      "class": "logging.FileHandler",
+      "filename": "logs/api.log",
+      "encoding": "utf-8"
+    },
+    "access_file": {
+      "formatter": "detailed",
+      "class": "logging.FileHandler",
+      "filename": "logs/uvicorn_access.log",
+      "encoding": "utf-8"
+    }
+  },
+  "loggers": {
+    "uvicorn": {
+      "handlers": ["default", "file"],
+      "level": "INFO"
+    },
+    "uvicorn.error": {
+      "level": "INFO"
+    },
+    "uvicorn.access": {
+      "handlers": ["access", "access_file"],
+      "level": "INFO",
+      "propagate": false
+    },
+    "be_invest": {
+      "handlers": ["default", "file"],
+      "level": "INFO"
+    },
+    "be_invest.api.server": {
+      "handlers": ["default", "file"],
+      "level": "INFO"
+    },
+    "be_invest.fetchers": {
+      "handlers": ["default", "file"],
+      "level": "DEBUG"
+    },
+    "be_invest.sources.scrape": {
+      "handlers": ["default", "file"],
+      "level": "DEBUG"
+    },
+    "be_invest.sources.llm_extract": {
+      "handlers": ["default", "file"],
+      "level": "DEBUG"
+    }
+  }
+}
+

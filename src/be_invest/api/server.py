@@ -6,12 +6,13 @@ import logging
 import os
 import re
 import shutil
+import time
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable
 
-import datetime
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
@@ -78,6 +79,68 @@ app.add_middleware(
 
 # Initialize caches
 llm_cache = FileCache(Path("data/cache/llm"), default_ttl=7 * 24 * 3600)  # 7 days
+
+
+# ========================================================================================
+# TIMING UTILITIES
+# ========================================================================================
+
+def time_api_call(func: Callable) -> Callable:
+    """Decorator to log API call execution time."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        endpoint_name = func.__name__
+
+        try:
+            result = func(*args, **kwargs)
+            duration = time.time() - start_time
+            logger.info(f"[ENDPOINT] {endpoint_name} completed in {duration:.3f}s")
+            return result
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.error(f"[ENDPOINT_ERROR] {endpoint_name} failed after {duration:.3f}s: {str(e)}")
+            raise
+
+    return wrapper
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Middleware to log all HTTP requests with detailed timing and information."""
+    start_time = time.time()
+    method = request.method
+    path = request.url.path
+    query_string = request.url.query
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Build URL string
+    url_str = path
+    if query_string:
+        url_str += f"?{query_string}"
+
+    try:
+        response = await call_next(request)
+        duration = time.time() - start_time
+        status_code = response.status_code
+
+        # Log detailed request information
+        logger.info(
+            f"API Request | Time: {duration*1000:.2f}ms | "
+            f"{method} {url_str} | Status: {status_code} | "
+            f"Client: {client_ip}"
+        )
+
+        return response
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(
+            f"API Error | Time: {duration*1000:.2f}ms | "
+            f"{method} {url_str} | Error: {str(e)} | "
+            f"Client: {client_ip}",
+            exc_info=True
+        )
+        raise
 news_cache = FileCache(Path("data/cache/news"), default_ttl=24 * 3600)  # 24 hours
 
 
@@ -317,14 +380,16 @@ async def options_handler():
 
 
 @app.get("/cost-analysis", response_class=JSONResponse)
+@time_api_call
 def get_cost_analysis() -> Dict[str, Any]:
     """Get the comprehensive cost and charges analysis for all brokers."""
     return _get_cost_analysis_data()
 
 
 @app.get("/cost-comparison-tables", response_class=JSONResponse)
+@time_api_call
 def get_cost_comparison_tables(
-        model: str = Query("gpt-4o", description="LLM to use: gpt-4o (default), claude-sonnet-4-20250514, gpt-4-turbo"),
+        model: str = Query("claude-sonnet-4-20250514", description="LLM to use: claude-sonnet-4-20250514 (default), gpt-4o, gpt-4-turbo"),
         force: bool = Query(False, description="Force fresh generation, ignore cache")
 ) -> Dict[str, Any]:
     """
@@ -361,82 +426,55 @@ def get_cost_comparison_tables(
         )
 
     # Prepare detailed instructions for the LLM
-    prompt = f"""You are a Lead Financial Data Analyst specializing in the Belgian investment market.
+    prompt = f"""You are a Lead Financial Data Analyst.
 
     TASK: Conduct a rigorous pricing analysis of Belgian brokerage platforms for the **Euronext Brussels** exchange.
     Output the data into a structured JSON dataset grouped strictly by **Market**, then by **Asset Class**.
 
     BROKERS TO ANALYZE: {', '.join(broker_names)}
+    TRANSACTION SIZES (EUR): 250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000
 
-    TRANSACTION SIZES (in EUR): 250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000
-
-    MARKETS TO ANALYZE:
-    1. **Euronext Brussels** (Stocks)
-    2. **Euronext Brussels** (ETFs)
-    3. **Euronext Brussels** (Bonds - Secondary Market)
-
-    BROKER DATA:
+    INPUT DATA:
     {json.dumps(cost_data, indent=2)}
 
-    ### CRITICAL INSTRUCTIONS
+    ### ANALYTICAL METHODOLOGY (STRICT)
 
-    1. **Fee Analysis**:
-       - **Handling Fees**: ALWAYS ADD any "Handling" or "Service" fees to the base fee (e.g., Degiro's €1.00 handling fee).
-       - **Slice Logic**:
-         - **Rebel**: Above €2,500, the fee is per *started* slice.
-         - **Keytrade**: Above €2,500, base fee applies up to €10k. Above €10k, add "additional slice" cost for every extra €10k started.
-         - **Bolero**: Respect the "Max" caps defined in the tiers.
-       - **Bond Minimums**: Pay close attention to minimum fees for bonds (e.g., ING's €50 minimum, Keytrade's €29.95 minimum).
+    1. **Total Cost Formula (Commission + Handling)**:
+       - **Degiro Rule**: You MUST add the "Standard Handling Fee" (€1.00) to the "Base Commission" (€2.00) for Stocks, ETFs, and Bonds.
+       - *Result*: The minimum fee for Degiro Brussels is **€3.00** (2+1), NOT €2.00.
 
-    2. **Calculation Logic (EXHAUSTIVE & MANDATORY)**:
-       - For **EVERY** Broker (Bolero, Keytrade, Degiro, ING, Rebel, Revolut):
-       - For **EVERY** Asset Class (Stocks, ETFs, Bonds):
-       - You MUST provide a specific text explanation for **ALL 9 TIERS**:
-         `["250", "500", "1000", "1500", "2000", "2500", "5000", "10000", "50000"]`
-       - **STRICT PROHIBITION**: Do not skip keys. Do not group keys (e.g., do not say "250-2500: €3"). Do not say "Same as stocks". You must write out the logic for every single line item.
-       - **Format**: Show the math. E.g., "Base €14.95 + (4 x €7.50 slices) = €44.95".
+    2. **Tier Transition Logic (Bolero)**:
+       - Pay close attention to when a tier ends.
+       - **Bolero Rule**: The fixed €7.50 fee ends at €2,500.
+       - *The Trap*: For a **€5,000** trade, you are in the new tier ("15 per 10,000").
+       - *Calculation*: €5,000 is 1 started slice of €10,000. Fee = **€15.00**. (Do NOT use the €7.50 rate).
 
-    3. **Notes & Hidden Fees (VERIFIED)**:
-       - **Custody Fees**: Check ING Self Invest carefully (0.0242%/month).
-       - **Real-Time Quotes**: Verify cost in source (Keytrade €2.50/mo vs Bolero Free).
-       - **Connectivity Fees**: Mention Degiro's €2.50/yr fee.
-    
-    ### PHASE 1: LOGIC EXTRACTION (CRITICAL)
-    Before calculating any numbers, you must scan the data and extract the **Lowest Available Online/Web Rate** for each broker.
-    **Rules for Extraction**:
-    1. **Online Priority**: If multiple fees exist (e.g., "Standard" vs "Web App" or "Offline" vs "Online"), YOU MUST CHOOSE THE "ONLINE/WEB/APP" RATE. Ignore "Phone", "Desk", or "Normal" rates if a cheaper digital option exists.
-       - *Example Fix*: For ING, ignore "1% (Min €40)". Pick "0.35% (Min €1)".
-    2. **Rate Identification**:
-       - If text says "25 per 10,000", translate to: `Amount * 0.0025`.
-       - If text says "15 per 10,000 slice", translate to: `ceil(Amount/10000) * 15`.
-    3. **Constraint Identification**: Note all Minimums (Floor) and Maximums (Cap).
-    
-    ### PHASE 2: CALCULATION
-    Calculate the fee for these exact amounts: [250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000].
-    *Perform the calculation step-by-step in your reasoning to ensure accuracy.*
+    3. **Slice/Tranche Math (Keytrade & Rebel)**:
+       - **Step 1**: Identify Base Threshold. **Step 2**: Calculate Remainder. **Step 3**: Count Slices (`Ceiling(Remainder / Slice_Size)`).
+       - *Keytrade*: Base €14.95 (up to €10k). Trade €50k -> Remainder €40k -> 4 slices. Total = 14.95 + (4 * 7.50) = 44.95.
 
-    ### OUTPUT FORMAT
-    Return ONLY a valid JSON object.
+    4. **Web Rate & Minimums (ING)**:
+       - Use ING's 0.35% (Web) rate.
+       - *Constraint*: Apply the **Minimum Fee** (€1.00).
+       - *Example*: €250 * 0.35% = €0.88 -> Fee is **€1.00**.
+
+    ### OUTPUT INSTRUCTIONS
+
+    1. **Calculate**: Compute the exact fee for each of the 9 transaction sizes.
+    2. **Explain**: In `calculation_logic`, write the math for **EVERY** single amount.
+       - *Must Explain*: "Degiro: €2 Commission + €1 Handling = €3"
+       - *Must Explain*: "Bolero: €5,000 is > €2,500, so €15 per 10k slice applies = €15"
+    3. **Notes**: Populate the `notes` section with findings from a "Hidden Cost Scavenger Hunt" (Custody fees, connectivity fees, etc.).
+       - *Must Include*: "Any hidden costs like custody fees, connectivity fees, or platform fees must be noted here."
+
+    ### REQUIRED JSON STRUCTURE
 
     {{
       "euronext_brussels": {{
-        "stocks": [
-          {{
-            "broker": "Rebel",
-            "250": 3.00,
-            "500": 3.00,
-            "1000": 3.00,
-            "1500": 3.00,
-            "2000": 3.00,
-            "2500": 3.00,
-            "5000": 10.00,
-            "10000": 10.00,
-            "50000": 50.00
-          }}
-        ],
+        "stocks": [ ... ],
         "etfs": [ ... ],
         "bonds": [ ... ],
-        "calculation_logic": {{
+        "calculation_logic": {{ 
           "Rebel": {{
             "stocks": {{
               "250": "Tier 1: Flat fee of €3 (<= €2,500)",
@@ -460,37 +498,14 @@ def get_cost_comparison_tables(
               "10000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
               "50000": "Slice Tier (>€2,500): 5 x €10k slices = €50"
             }}
-          }},
-          "Keytrade Bank": {{
-            "stocks": {{
-              "250": "Tier 1: Flat fee of €2.45 (<= €250)",
-              "500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "1000": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "1500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "2000": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "2500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "5000": "Tier 3: Flat fee of €14.95 (<= €10,000)",
-              "10000": "Tier 3: Flat fee of €14.95 (<= €10,000)",
-              "50000": "Tier 4: €14.95 (base) + 4 additional €10k slices (€7.50 each) = €44.95"
-            }},
-            "etfs": {{
-              "250": "Tier 1: Flat fee of €2.45 (<= €250)",
-              "500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "1000": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "1500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "2000": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "2500": "Tier 2: Flat fee of €5.95 (<= €2,500)",
-              "5000": "Tier 3: Flat fee of €14.95 (<= €10,000)",
-              "10000": "Tier 3: Flat fee of €14.95 (<= €10,000)",
-              "50000": "Tier 4: €14.95 (base) + 4 additional €10k slices (€7.50 each) = €44.95"
-            }}
-          }}
-        }},
+         }},
         "notes": {{
-          "Rebel": "Free real-time quotes. No custody fee.",
-          "Degiro Belgium": "Includes €1 handling fee. Connectivity fee (€2.50/yr) applies.",
-          "Keytrade Bank": "Real-time quotes cost €2.50/month (Euronext). No custody fee.",
-          "ING Self Invest": "0.0242% monthly custody fee applies to shares/ETFs (min €0.30/mo)."
+          "Bolero": "Text...",
+          "Keytrade Bank": "Text...",
+          "Degiro Belgium": "Text...",
+          "ING Self Invest": "Text...",
+          "Rebel": "Text...",
+          "Revolut": "Text..."
         }}
       }}
     }}
@@ -599,8 +614,9 @@ def get_cost_comparison_tables(
 
 
 @app.get("/financial-analysis")
+@time_api_call
 def generate_financial_analysis(
-        model: str = Query("gpt-4o", description="LLM to use: gpt-4o (default), claude-sonnet-4-20250514"),
+        model: str = Query("claude-sonnet-4-20250514", description="LLM to use: claude-sonnet-4-20250514 (default), gpt-4o"),
         force: bool = Query(False, description="Force fresh generation, ignore cache")
 ) -> Dict[str, Any]:
     """
@@ -850,6 +866,7 @@ Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize ha
 
 
 @app.get("/brokers")
+@time_api_call
 def list_brokers() -> List[Dict[str, Any]]:
     path = _default_brokers_yaml()
     if not path.exists():
@@ -859,6 +876,7 @@ def list_brokers() -> List[Dict[str, Any]]:
 
 
 @app.post("/refresh-pdfs")
+@time_api_call
 def refresh_pdfs(
         brokers_to_refresh: Optional[List[str]] = Query(None,
                                                         description="Specific brokers to refresh (if None, refreshes all)"),
@@ -970,6 +988,7 @@ def _clear_pdf_text_dir(directory: Path, keep: Optional[List[str]] = None) -> No
 
 
 @app.get("/cost-analysis/{broker_name}")
+@time_api_call
 def get_broker_cost_analysis(broker_name: str) -> Dict[str, Any]:
     output_dir = _default_output_dir()
     analysis_file = output_dir / "broker_cost_analyses.json"
@@ -1001,6 +1020,8 @@ def get_broker_cost_analysis(broker_name: str) -> Dict[str, Any]:
 
 
 @app.get("/summary")
+
+@time_api_call
 def get_summary() -> str:
     output_dir = _default_output_dir()
     summary_file = output_dir / "exhaustive_cost_charges_summary.md"
@@ -1020,11 +1041,12 @@ def get_summary() -> str:
 
 
 @app.post("/refresh-and-analyze")
+@time_api_call
 def refresh_and_analyze(
         brokers_to_process: Optional[List[str]] = Query(None,
                                                         description="Specific brokers to analyze (if None, analyzes all)"),
         force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
-        model: str = Query("gpt-4o", description="LLM model: gpt-4o (default), claude-sonnet-4-20250514, etc."),
+        model: str = Query("claude-sonnet-4-20250514", description="LLM model: claude-sonnet-4-20250514 (default), gpt-4o, etc."),
 ) -> Dict[str, Any]:
     """
     Refresh PDFs, extract text, and generate comprehensive cost analysis.
@@ -1218,6 +1240,7 @@ Return ONLY a valid JSON object with structured fee data.
 # ========================================================================================
 
 @app.post("/news/scrape")
+@time_api_call
 def scrape_news_endpoint(
     brokers_to_scrape: Optional[List[str]] = Query(None, description="Specific brokers to scrape (if None, scrapes all with news_sources)"),
     force: bool = Query(False, description="Force fresh scrape, ignore cache"),
@@ -1344,6 +1367,7 @@ def scrape_news_endpoint(
 
 
 @app.post("/news", status_code=201)
+@time_api_call
 def add_news_flash(news: NewsFlashRequest) -> Dict[str, str]:
     """
     Add a new news flash for a broker.
@@ -1374,6 +1398,7 @@ def add_news_flash(news: NewsFlashRequest) -> Dict[str, str]:
 
 
 @app.get("/news", response_model=List[NewsFlashResponse])
+@time_api_call
 def get_all_news() -> List[NewsFlashResponse]:
     """
     Get all news flashes, sorted by creation date (newest first).
@@ -1399,6 +1424,7 @@ def get_all_news() -> List[NewsFlashResponse]:
 
 
 @app.get("/news/broker/{broker_name}", response_model=List[NewsFlashResponse])
+@time_api_call
 def get_news_for_broker(broker_name: str) -> List[NewsFlashResponse]:
     """
     Get all news flashes for a specific broker.
@@ -1424,6 +1450,7 @@ def get_news_for_broker(broker_name: str) -> List[NewsFlashResponse]:
 
 
 @app.get("/news/recent", response_model=List[NewsFlashResponse])
+@time_api_call
 def get_recent_news_endpoint(limit: int = Query(10, description="Maximum number of news items to return")) -> List[NewsFlashResponse]:
     """
     Get the most recent news flashes across all brokers.
@@ -1449,6 +1476,7 @@ def get_recent_news_endpoint(limit: int = Query(10, description="Maximum number 
 
 
 @app.get("/news/statistics")
+@time_api_call
 def get_news_stats() -> Dict[str, Any]:
     """
     Get statistics about the news data.

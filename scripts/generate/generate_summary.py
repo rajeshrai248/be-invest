@@ -81,7 +81,7 @@ Extract ALL fee tiers and structures. Be thorough. Return valid JSON only."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=[
                 {
                     "role": "system",
@@ -97,7 +97,7 @@ Extract ALL fee tiers and structures. Be thorough. Return valid JSON only."""
         )
 
         response_text = response.choices[0].message.content.strip()
-        logger.info(f"✅ Received response from GPT-4o")
+        logger.info(f"✅ Received response from {model}")
 
         # Clean response (remove markdown code blocks if present)
         if response_text.startswith("```"):
@@ -185,7 +185,7 @@ Include tables where helpful for comparison."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=[
                 {
                     "role": "system",
@@ -238,7 +238,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python generate_summary.py --model gpt-4o
+  python generate_summary.py --model claude-sonnet-4-20250514
   python generate_summary.py --pdf-text-dir data/output/pdf_text
   python generate_summary.py --output my_report.md --log-level DEBUG
         """
@@ -259,8 +259,8 @@ Examples:
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o",
-        help="OpenAI model (default: gpt-4o)",
+        default="claude-sonnet-4-20250514",
+        help="LLM model (default: claude-sonnet-4-20250514)",
     )
     parser.add_argument(
         "--api-key-env",

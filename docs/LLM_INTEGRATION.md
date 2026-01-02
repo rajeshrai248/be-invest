@@ -238,7 +238,7 @@ def extract_fee_records_via_llm(
     broker: str,
     source_url: str,
     *,
-    model: str = "gpt-4o",
+    model: str = "claude-sonnet-4-20250514",
     llm_cache_dir: Optional[Path] = None,
     max_output_tokens: int = 2000,
     temperature: float = 0.0,
@@ -440,7 +440,7 @@ def extract_with_fallback(
     # Try primary model first
     try:
         return extract_fee_records_via_llm(
-            text, broker, source_url, model="gpt-4o"
+            text, broker, source_url, model="claude-sonnet-4-20250514"
         )
     except APIKeyError:
         logger.info("OpenAI not available, trying Anthropic...")
@@ -521,7 +521,7 @@ class LLMCache:
 ```python
 async def extract_multiple_brokers(
     broker_documents: Dict[str, str],
-    model: str = "gpt-4o",
+    model: str = "claude-sonnet-4-20250514",
     max_concurrent: int = 3
 ) -> Dict[str, List[FeeRecord]]:
     """Extract fees for multiple brokers concurrently."""
@@ -716,7 +716,7 @@ def optimize_extraction_cost(
     # Fall back to expensive model if needed
     logger.info("Using expensive model for better quality")
     return extract_fee_records_via_llm(
-        text, broker, "", model="gpt-4o"
+        text, broker, "", model="claude-sonnet-4-20250514"
     )
 ```
 

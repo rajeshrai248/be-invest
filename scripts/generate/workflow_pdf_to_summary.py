@@ -101,8 +101,8 @@ Examples:
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o",
-        help="OpenAI model to use (default: gpt-4o)",
+        default="claude-sonnet-4-20250514",
+        help="LLM model to use (default: claude-sonnet-4-20250514)",
     )
     parser.add_argument(
         "--log-level",
