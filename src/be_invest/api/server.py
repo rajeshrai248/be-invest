@@ -23,6 +23,7 @@ from ..sources.scrape import scrape_fee_records
 from ..sources.news_scrape import scrape_broker_news
 from ..news import NewsFlash, save_news_flash, load_news, get_news_by_broker, delete_news_flash, get_recent_news, get_news_statistics
 from ..utils.cache import FileCache
+from ..validation.validator import validate_comparison_table, build_correction_prompt, patch_table_with_corrections
 
 
 # ========================================================================================
@@ -582,6 +583,56 @@ def get_cost_comparison_tables(
             raise ValueError("No valid exchange data found in response")
 
         logger.info(f"✅ Successfully generated comparison tables for {len(found_exchanges)} exchanges with {total_broker_entries} broker entries")
+
+        # Validate fees against deterministic calculator
+        validation = validate_comparison_table(result)
+        validation_retries = 0
+        validation_method = "llm_validated" if validation.is_valid else "llm_unvalidated"
+
+        if not validation.is_valid:
+            logger.warning(
+                f"⚠️  Fee validation failed: {len(validation.errors)} errors out of {validation.checked} checks"
+            )
+            for err in validation.errors:
+                logger.warning(f"   {err.broker} {err.instrument} €{err.amount}: LLM={err.llm_value}, expected={err.expected_value}")
+
+            # Retry up to 2 times with correction feedback
+            for retry in range(2):
+                validation_retries = retry + 1
+                corrections = build_correction_prompt(validation.errors)
+                retry_prompt = prompt + "\n\n" + corrections
+                logger.info(f"🔄 Retry {validation_retries}/2 with {len(validation.errors)} correction(s)...")
+
+                response_text = _call_llm(model, system_prompt, retry_prompt, response_format="json")
+                try:
+                    result = json.loads(response_text)
+                except json.JSONDecodeError:
+                    logger.error(f"❌ JSON parsing failed on validation retry {validation_retries}")
+                    continue
+
+                validation = validate_comparison_table(result)
+                if validation.is_valid:
+                    validation_method = "llm_validated"
+                    logger.info(f"✅ Validation passed after {validation_retries} retry(ies)")
+                    break
+                else:
+                    logger.warning(f"⚠️  Retry {validation_retries} still has {len(validation.errors)} error(s)")
+
+            if not validation.is_valid:
+                # Final fallback: patch wrong values directly
+                logger.warning(f"⚠️  Patching {len(validation.errors)} remaining error(s) with deterministic values")
+                result = patch_table_with_corrections(result, validation.errors)
+                validation_method = "llm_patched"
+
+        # Add validation metadata
+        result["_validation"] = {
+            "method": validation_method,
+            "retries": validation_retries,
+            "cells_checked": validation.checked,
+            "cells_corrected": len(validation.errors) if validation_method == "llm_patched" else 0,
+        }
+
+        logger.info(f"✅ Validation complete: method={validation_method}, retries={validation_retries}, checked={validation.checked}")
 
         # Save the JSON response to output directory
         output_dir = _default_output_dir()
