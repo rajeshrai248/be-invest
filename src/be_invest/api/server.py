@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import hashlib
 import json
 import logging
@@ -17,6 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 
+from langfuse.decorators import observe, langfuse_context
+
 from ..config_loader import load_brokers_from_yaml
 from ..models import Broker
 from ..sources.scrape import scrape_fee_records
@@ -24,6 +29,13 @@ from ..sources.news_scrape import scrape_broker_news
 from ..news import NewsFlash, save_news_flash, load_news, get_news_by_broker, delete_news_flash, get_recent_news, get_news_statistics
 from ..utils.cache import FileCache
 from ..validation.validator import validate_comparison_table, build_correction_prompt, patch_table_with_corrections
+from ..validation.fee_calculator import (
+    build_comparison_tables, BROKER_NOTES, load_fee_rules, save_fee_rules,
+    get_rules_diff, FEE_RULES, FeeRule, HiddenCosts, HIDDEN_COSTS,
+    _get_display_name, _build_broker_notes,
+    calculate_fee, generate_explanation, BROKER_ALIASES, _ensure_rules_loaded,
+)
+from ..validation.persona_calculator import build_persona_comparison
 
 
 # ========================================================================================
@@ -59,6 +71,151 @@ class NewsDeleteRequest(BaseModel):
     title: str
 
 
+class ChatMessage(BaseModel):
+    """A single message in conversation history."""
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """Request model for the chatbot endpoint."""
+    question: str
+    history: Optional[List[ChatMessage]] = None
+    model: Optional[str] = None
+    lang: Optional[str] = "en"
+
+
+# ========================================================================================
+# LANGUAGE SUPPORT
+# ========================================================================================
+
+LANGUAGE_MAP = {
+    "en": "English",
+    "fr-be": "French (Belgian)",
+    "nl-be": "Dutch (Belgian)",
+}
+
+
+def _get_language_name(lang: str) -> str:
+    """Map a language code to a full language name for LLM prompts."""
+    return LANGUAGE_MAP.get(lang, "English")
+
+
+# Static translations for persona definitions
+_PERSONA_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
+    "fr-be": {
+        "passive_investor": {
+            "name": "Investisseur Passif",
+            "description": "Achats mensuels d'ETF de 500 EUR. Stratégie d'achat et de conservation à long terme.",
+        },
+        "moderate_investor": {
+            "name": "Investisseur Modéré",
+            "description": "Combinaison d'achats d'ETF et d'actions. Gestion de portefeuille semi-active.",
+        },
+        "active_trader": {
+            "name": "Trader Actif",
+            "description": "Transactions fréquentes d'actions, y compris de grandes positions. Gestion active du portefeuille.",
+        },
+    },
+    "nl-be": {
+        "passive_investor": {
+            "name": "Passieve Belegger",
+            "description": "Maandelijkse ETF-aankopen van 500 EUR. Langetermijn buy-and-hold strategie.",
+        },
+        "moderate_investor": {
+            "name": "Gematigde Belegger",
+            "description": "Mix van ETF- en aandelenaankopen. Semi-actief portefeuillebeheer.",
+        },
+        "active_trader": {
+            "name": "Actieve Handelaar",
+            "description": "Frequente aandelentransacties inclusief grote posities. Actief portefeuillebeheer.",
+        },
+    },
+}
+
+# Static translation fragments for broker hidden cost notes
+_NOTE_LABELS: Dict[str, Dict[str, str]] = {
+    "en": {
+        "custody": "Custody",
+        "month": "month",
+        "min": "min",
+        "connectivity": "Connectivity",
+        "exchange_year": "exchange/year",
+        "subscription": "Subscription",
+        "fx": "FX",
+        "dividend_fee": "Dividend fee",
+        "no_hidden": "No significant hidden costs",
+    },
+    "fr-be": {
+        "custody": "Frais de garde",
+        "month": "mois",
+        "min": "min",
+        "connectivity": "Connectivité",
+        "exchange_year": "bourse/an",
+        "subscription": "Abonnement",
+        "fx": "Frais de change",
+        "dividend_fee": "Frais de dividende",
+        "no_hidden": "Pas de frais cachés significatifs",
+    },
+    "nl-be": {
+        "custody": "Bewaarloon",
+        "month": "maand",
+        "min": "min",
+        "connectivity": "Connectiviteit",
+        "exchange_year": "beurs/jaar",
+        "subscription": "Abonnement",
+        "fx": "Wisselkoerskosten",
+        "dividend_fee": "Dividendkosten",
+        "no_hidden": "Geen significante verborgen kosten",
+    },
+}
+
+
+def _build_localized_broker_notes(lang: str) -> Dict[str, str]:
+    """Build broker notes from structured hidden costs using localized labels.
+
+    Uses static translation labels instead of LLM. Falls back to English for
+    unknown languages.
+    """
+    from ..validation.fee_calculator import HIDDEN_COSTS, _build_broker_notes
+    if not HIDDEN_COSTS:
+        return _build_broker_notes()
+
+    labels = _NOTE_LABELS.get(lang, _NOTE_LABELS["en"])
+    notes = {}
+
+    for broker_name, costs in HIDDEN_COSTS.items():
+        # If there's a raw notes string and lang is English, use it directly
+        if lang == "en" and costs.notes:
+            notes[broker_name] = costs.notes
+            continue
+
+        parts = []
+        if costs.custody_fee_monthly_pct > 0:
+            parts.append(f"{labels['custody']}: {costs.custody_fee_monthly_pct}%/{labels['month']} ({labels['min']} EUR{costs.custody_fee_monthly_min:.2f}/{labels['month']})")
+        if costs.connectivity_fee_per_exchange_year > 0:
+            parts.append(f"{labels['connectivity']}: EUR{costs.connectivity_fee_per_exchange_year:.2f}/{labels['exchange_year']}")
+        if costs.subscription_fee_monthly > 0:
+            parts.append(f"{labels['subscription']}: EUR{costs.subscription_fee_monthly:.2f}/{labels['month']}")
+        if costs.fx_fee_pct > 0:
+            parts.append(f"{labels['fx']}: {costs.fx_fee_pct}%")
+        if costs.dividend_fee_pct > 0:
+            parts.append(f"{labels['dividend_fee']}: {costs.dividend_fee_pct}%")
+        if not parts:
+            parts.append(labels["no_hidden"])
+
+        notes[broker_name] = ". ".join(parts) + "."
+
+    # Fallback statics for brokers with no hidden cost data
+    from ..validation.fee_calculator import _build_broker_notes as _build_en_notes
+    en_notes = _build_en_notes()
+    for name, note in en_notes.items():
+        if name not in notes:
+            notes[name] = note
+
+    return notes
+
+
 # ========================================================================================
 # FASTAPI APPLICATION
 # ========================================================================================
@@ -80,6 +237,15 @@ app.add_middleware(
 
 # Initialize caches
 llm_cache = FileCache(Path("data/cache/llm"), default_ttl=7 * 24 * 3600)  # 7 days
+
+# ========================================================================================
+# RATE LIMITING & SECURITY
+# ========================================================================================
+# Track requests per IP to prevent reconnaissance and abuse
+_ip_request_counts: Dict[str, List[float]] = {}
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_REQUESTS = 100  # max requests per window per IP
+_RATE_LIMIT_SCANS = 10  # max suspicious requests (404s, invalid paths) per window per IP
 
 
 # ========================================================================================
@@ -107,8 +273,8 @@ def time_api_call(func: Callable) -> Callable:
 
 
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Middleware to log all HTTP requests with detailed timing and information."""
+async def rate_limit_and_log(request: Request, call_next):
+    """Middleware to rate limit requests and log all HTTP requests."""
     start_time = time.time()
     method = request.method
     path = request.url.path
@@ -120,17 +286,64 @@ async def log_requests(request: Request, call_next):
     if query_string:
         url_str += f"?{query_string}"
 
+    # ====== RATE LIMITING ======
+    current_time = time.time()
+
+    # Initialize IP tracking if needed
+    if client_ip not in _ip_request_counts:
+        _ip_request_counts[client_ip] = []
+
+    # Clean old entries outside the rate limit window
+    _ip_request_counts[client_ip] = [
+        req_time for req_time in _ip_request_counts[client_ip]
+        if current_time - req_time < _RATE_LIMIT_WINDOW
+    ]
+
+    # Check if IP is scanning (making lots of 404s or probing invalid paths)
+    is_suspicious_path = (
+        path.startswith("/api/") or  # Probing for /api endpoints
+        "cmd=" in query_string or  # Command injection attempt
+        ".env" in path or  # Trying to access config files
+        "config" in path or  # Trying to access config
+        "admin" in path or  # Trying to access admin endpoints
+        "shell" in path or  # Trying to access shell
+        "exec" in path  # Trying to execute code
+    )
+
+    # Count requests
+    request_count = len(_ip_request_counts[client_ip])
+
+    # Check if rate limit exceeded
+    if request_count >= _RATE_LIMIT_REQUESTS:
+        logger.warning(f"🚨 Rate limit exceeded for IP {client_ip}: {request_count} requests in {_RATE_LIMIT_WINDOW}s")
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many requests. Please try again later."}
+        )
+
+    # Log suspicious activity
+    if is_suspicious_path:
+        logger.warning(f"⚠️  SUSPICIOUS REQUEST from {client_ip}: {method} {url_str}")
+
+    _ip_request_counts[client_ip].append(current_time)
+
+    # ====== CALL ENDPOINT ======
     try:
         response = await call_next(request)
         duration = time.time() - start_time
         status_code = response.status_code
 
         # Log detailed request information
-        logger.info(
+        log_msg = (
             f"API Request | Time: {duration*1000:.2f}ms | "
             f"{method} {url_str} | Status: {status_code} | "
             f"Client: {client_ip}"
         )
+
+        if is_suspicious_path:
+            logger.warning(log_msg)
+        else:
+            logger.info(log_msg)
 
         return response
     except Exception as e:
@@ -142,6 +355,8 @@ async def log_requests(request: Request, call_next):
             exc_info=True
         )
         raise
+
+
 news_cache = FileCache(Path("data/cache/news"), default_ttl=24 * 3600)  # 24 hours
 
 
@@ -165,7 +380,9 @@ def _default_brokers_yaml() -> Path:
     return fallback
 
 
-def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format: str = "json") -> str:
+@observe(as_type="generation")
+def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format: str = "json",
+              temperature: Optional[float] = None, messages: Optional[List[dict]] = None) -> str:
     """
     Unified LLM caller supporting both OpenAI (gpt-*) and Anthropic (claude-*) models.
 
@@ -174,11 +391,148 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
         system_prompt: System message content
         user_prompt: User message content
         response_format: "json" for JSON mode, "text" for regular text
+        temperature: Optional temperature override (defaults to 0.0)
+        messages: Optional list of message dicts; if provided, used instead of single user_prompt
 
     Returns:
         String response from the LLM
     """
-    if model.startswith("claude"):
+    effective_temperature = temperature if temperature is not None else 0.0
+
+    # Determine provider for metadata
+    if model.startswith("gemini"):
+        provider = "google"
+    elif model.startswith("groq/"):
+        provider = "groq"
+    elif model.startswith("claude"):
+        provider = "anthropic"
+    else:
+        provider = "openai"
+
+    langfuse_context.update_current_observation(
+        model=model,
+        input={"system": system_prompt, "user": user_prompt},
+        metadata={"provider": provider, "temperature": effective_temperature, "response_format": response_format},
+    )
+    if model.startswith("gemini"):
+        # Use Google Generative AI SDK
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="Google Generative AI SDK not installed. Run: pip install google-generativeai"
+            )
+
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GOOGLE_API_KEY not set.")
+
+        genai.configure(api_key=api_key)
+
+        logger.info(f"Calling Gemini model: {model}")
+
+        try:
+            generation_config = {
+                "temperature": effective_temperature,
+            }
+            if response_format == "json":
+                generation_config["response_mime_type"] = "application/json"
+
+            model_instance = genai.GenerativeModel(
+                model_name=model,
+                system_instruction=system_prompt,
+                generation_config=generation_config,
+            )
+
+            # Build messages for Gemini (uses "model" instead of "assistant")
+            if messages is not None:
+                gemini_messages = []
+                for msg in messages:
+                    role = "model" if msg["role"] == "assistant" else msg["role"]
+                    gemini_messages.append({"role": role, "parts": [msg["content"]]})
+                response = model_instance.generate_content(gemini_messages)
+            else:
+                response = model_instance.generate_content(user_prompt)
+
+            # Report token usage to Langfuse
+            usage_meta = getattr(response, "usage_metadata", None)
+            if usage_meta:
+                langfuse_context.update_current_observation(
+                    output=response.text,
+                    usage={
+                        "input": getattr(usage_meta, "prompt_token_count", 0),
+                        "output": getattr(usage_meta, "candidates_token_count", 0),
+                    },
+                )
+            else:
+                langfuse_context.update_current_observation(output=response.text)
+
+            return response.text
+
+        except Exception as e:
+            logger.error(f"Gemini API call failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Gemini API call failed: {str(e)}")
+
+    elif model.startswith("groq/"):
+        # Use Groq API (OpenAI-compatible)
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI SDK not installed. Run: pip install openai"
+            )
+
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GROQ_API_KEY not set.")
+
+        client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+        groq_model = model.removeprefix("groq/")
+
+        logger.info(f"Calling Groq model: {groq_model}")
+
+        try:
+            if messages is not None:
+                api_messages = [{"role": "system", "content": system_prompt}] + messages
+            else:
+                api_messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+
+            params = {
+                "model": groq_model,
+                "messages": api_messages,
+                "temperature": effective_temperature,
+            }
+
+            if response_format == "json":
+                params["response_format"] = {"type": "json_object"}
+
+            response = client.chat.completions.create(**params)
+            result_text = response.choices[0].message.content
+
+            # Report token usage to Langfuse
+            if response.usage:
+                langfuse_context.update_current_observation(
+                    output=result_text,
+                    usage={
+                        "input": response.usage.prompt_tokens,
+                        "output": response.usage.completion_tokens,
+                    },
+                )
+            else:
+                langfuse_context.update_current_observation(output=result_text)
+
+            return result_text
+
+        except Exception as e:
+            logger.error(f"Groq API call failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Groq API call failed: {str(e)}")
+
+    elif model.startswith("claude"):
         # Use Anthropic API
         try:
             import anthropic
@@ -208,14 +562,18 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
                 if response_format == "json":
                     enhanced_user_prompt += "\n\nIMPORTANT: Return ONLY valid JSON. No markdown, no explanations, no code blocks."
 
+                # Use provided messages or build from user_prompt
+                if messages is not None:
+                    api_messages = messages
+                else:
+                    api_messages = [{"role": "user", "content": enhanced_user_prompt}]
+
                 response = client.messages.create(
                     model=model,
                     max_tokens=4096,
-                    temperature=0.0,
+                    temperature=effective_temperature,
                     system=system_prompt,
-                    messages=[
-                        {"role": "user", "content": enhanced_user_prompt}
-                    ]
+                    messages=api_messages,
                 )
 
                 response_text = response.content[0].text
@@ -253,6 +611,15 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
                         # This is a basic attempt - if it fails, we'll let the calling function handle it
                         pass
 
+                # Report token usage to Langfuse
+                langfuse_context.update_current_observation(
+                    output=response_text,
+                    usage={
+                        "input": response.usage.input_tokens,
+                        "output": response.usage.output_tokens,
+                    },
+                )
+
                 return response_text
 
             except anthropic.RateLimitError as e:
@@ -265,7 +632,9 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
                     logger.error(f"❌ Rate limit exceeded after {max_retries} attempts")
                     # Fallback to GPT-4o if rate limited
                     logger.info("🔄 Falling back to GPT-4o due to rate limits...")
-                    return _call_llm("gpt-4o", system_prompt, user_prompt, response_format)
+                    langfuse_context.score_current_trace(name="required_fallback", value=1)
+                    return _call_llm("gpt-4o", system_prompt, user_prompt, response_format,
+                                     temperature=temperature, messages=messages)
 
             except HTTPException:
                 raise
@@ -292,23 +661,41 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
         logger.info(f"🔄 Calling OpenAI model: {model}")
 
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
+            # Use provided messages or build from user_prompt
+            if messages is not None:
+                api_messages = [{"role": "system", "content": system_prompt}] + messages
+            else:
+                api_messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
 
             # OpenAI-specific parameters
             params = {
                 "model": model,
-                "messages": messages,
-                "temperature": 0.0,
+                "messages": api_messages,
+                "temperature": effective_temperature,
             }
 
             if response_format == "json":
                 params["response_format"] = {"type": "json_object"}
 
             response = client.chat.completions.create(**params)
-            return response.choices[0].message.content
+            result_text = response.choices[0].message.content
+
+            # Report token usage to Langfuse
+            if response.usage:
+                langfuse_context.update_current_observation(
+                    output=result_text,
+                    usage={
+                        "input": response.usage.prompt_tokens,
+                        "output": response.usage.completion_tokens,
+                    },
+                )
+            else:
+                langfuse_context.update_current_observation(output=result_text)
+
+            return result_text
 
         except HTTPException:
             raise
@@ -366,6 +753,7 @@ def health() -> Dict[str, str]:
 @app.options("/news/recent")
 @app.options("/news/statistics")
 @app.options("/news/scrape")
+@app.options("/chat")
 async def options_handler():
     """Handle OPTIONS (preflight) requests for CORS."""
     return JSONResponse(
@@ -389,32 +777,30 @@ def get_cost_analysis() -> Dict[str, Any]:
 
 @app.get("/cost-comparison-tables", response_class=JSONResponse)
 @time_api_call
+@observe(name="cost-comparison-tables")
 def get_cost_comparison_tables(
-        model: str = Query("claude-sonnet-4-20250514", description="LLM to use: claude-sonnet-4-20250514 (default), gpt-4o, gpt-4-turbo"),
-        force: bool = Query(False, description="Force fresh generation, ignore cache")
+        model: str = Query("claude-sonnet-4-20250514", description="LLM to use for notes generation"),
+        force: bool = Query(False, description="Force fresh generation, ignore cache"),
+        lang: str = Query("en", description="Response language: en, fr-be, nl-be")
 ) -> Dict[str, Any]:
     """
-    Generates three cost comparison tables for ETFs, Stocks, and Bonds
-    based on the existing broker_cost_analyses.json data.
+    Generates three cost comparison tables for ETFs, Stocks, and Bonds.
 
-    Supports both OpenAI (gpt-*) and Anthropic (claude-*) models.
-    
-    Set force=True to bypass cache and generate fresh data.
-
-    Role: You are a Financial Data Analyst specializing in the Belgian investment market.
-
-    Task: Conduct a pricing analysis of Belgian brokerage platforms and output the data
-    into three distinct matrix tables.
+    Fees are computed deterministically from fee rules (no LLM math).
+    Notes and text labels are localized to the requested language.
+    Set force=True to re-extract fee rules from broker_cost_analyses.json
+    via LLM before building tables.
     """
     # Check cache first (unless force=True)
-    cache_key = FileCache.make_key("cost_comparison", model)
+    cache_key = FileCache.make_key("cost_comparison", model, lang)
     if not force:
         cached = llm_cache.get(cache_key)
         if cached:
-            logger.info(f"📦 Returning cached cost comparison tables for model: {model}")
+            logger.info(f"Returning cached cost comparison tables (lang={lang})")
+            langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": True})
             return cached
 
-    # ... (existing logic continues)
+    langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": False})
     cost_data = _get_cost_analysis_data()
 
     # Extract broker names
@@ -423,252 +809,210 @@ def get_cost_comparison_tables(
     if not broker_names:
         raise HTTPException(
             status_code=404,
-            detail="No valid broker data found. Run generate_exhaustive_summary.py first."
+            detail="No valid broker data found. Run /refresh-and-analyze first."
         )
 
-    # Prepare detailed instructions for the LLM
-    prompt = f"""You are a Lead Financial Data Analyst.
+    # When force=True, re-extract fee rules + hidden costs from broker_cost_analyses.json
+    if force:
+        logger.info(f"force=True: Re-extracting fee rules from broker_cost_analyses.json using {model}")
+        try:
+            old_rules = dict(FEE_RULES)
+            new_rules = _extract_fee_rules_from_cost_data(cost_data, model)
+            if new_rules:
+                fee_rules_diff = get_rules_diff(old_rules, new_rules)
+                if fee_rules_diff:
+                    logger.info(f"Fee rules changed: {fee_rules_diff}")
+                # Merge new rules into existing (don't clear — preserves rules
+                # for any broker where extraction might have failed)
+                FEE_RULES.update(new_rules)
+                save_fee_rules(source="llm_extracted")
+                logger.info(f"Re-extracted {len(new_rules)} fee rules and hidden costs for {len(HIDDEN_COSTS)} brokers")
+            else:
+                logger.warning("Fee rule extraction returned no rules, using existing rules")
+        except Exception as e:
+            logger.warning(f"Fee rule re-extraction failed (using existing rules): {e}")
 
-    TASK: Conduct a rigorous pricing analysis of Belgian brokerage platforms for the **Euronext Brussels** exchange.
-    Output the data into a structured JSON dataset grouped strictly by **Market**, then by **Asset Class**.
+    logger.info(f"Building deterministic fee tables for {len(broker_names)} brokers (lang={lang}): {', '.join(broker_names)}")
 
-    BROKERS TO ANALYZE: {', '.join(broker_names)}
-    TRANSACTION SIZES (EUR): 250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000
+    # Build fee tables deterministically (no LLM needed)
+    result = build_comparison_tables(broker_names)
 
-    INPUT DATA:
-    {json.dumps(cost_data, indent=2)}
+    # Generate notes with localized labels (no LLM needed)
+    hidden_cost_notes = _build_localized_broker_notes(lang)
+    notes = {_get_display_name(name): hidden_cost_notes.get(_get_display_name(name), "") for name in broker_names}
+    result["euronext_brussels"]["notes"] = notes
 
-    ### ANALYTICAL METHODOLOGY (STRICT)
+    # Add investor persona comparison
+    persona_success = False
+    try:
+        persona_data = build_persona_comparison(broker_names)
+        result["euronext_brussels"]["investor_personas"] = persona_data["investor_personas"]
+        result["euronext_brussels"]["persona_definitions"] = persona_data["persona_definitions"]
+        persona_success = True
 
-    1. **Total Cost Formula (Commission + Handling)**:
-       - **Degiro Rule**: You MUST add the "Standard Handling Fee" (€1.00) to the "Base Commission" (€2.00) for Stocks, ETFs, and Bonds.
-       - *Result*: The minimum fee for Degiro Brussels is **€3.00** (2+1), NOT €2.00.
+        # Localize persona definitions for non-English
+        if lang != "en":
+            result["euronext_brussels"]["persona_definitions"] = _localize_persona_definitions(
+                model, result["euronext_brussels"]["persona_definitions"], lang
+            )
+    except Exception as e:
+        logger.warning(f"Persona calculation failed (non-fatal): {e}")
 
-    2. **Tier Transition Logic (Bolero)**:
-       - Pay close attention to when a tier ends.
-       - **Bolero Rule**: The fixed €7.50 fee ends at €2,500.
-       - *The Trap*: For a **€5,000** trade, you are in the new tier ("15 per 10,000").
-       - *Calculation*: €5,000 is 1 started slice of €10,000. Fee = **€15.00**. (Do NOT use the €7.50 rate).
+    # Count computed cells and analyze data quality
+    cells_computed = 0
+    cells_with_data = 0
+    pricing_tiers_found = set()
 
-    3. **Slice/Tranche Math (Keytrade & Rebel)**:
-       - **Step 1**: Identify Base Threshold. **Step 2**: Calculate Remainder. **Step 3**: Count Slices (`Ceiling(Remainder / Slice_Size)`).
-       - *Keytrade*: Base €14.95 (up to €10k). Trade €50k -> Remainder €40k -> 4 slices. Total = 14.95 + (4 * 7.50) = 44.95.
+    for asset_type in ["stocks", "etfs", "bonds"]:
+        asset_data = result["euronext_brussels"].get(asset_type, {})
+        for broker_name, broker_fees in asset_data.items():
+            cells_computed += len(broker_fees)
+            for tier_key, fee_value in broker_fees.items():
+                if fee_value is not None and fee_value != 0:
+                    cells_with_data += 1
+                pricing_tiers_found.add(tier_key)
 
-    4. **Web Rate & Minimums (ING)**:
-       - Use ING's 0.35% (Web) rate.
-       - *Constraint*: Apply the **Minimum Fee** (€1.00).
-       - *Example*: €250 * 0.35% = €0.88 -> Fee is **€1.00**.
+    # Calculate data completeness score
+    data_completeness = (cells_with_data / cells_computed * 100) if cells_computed > 0 else 0
 
-    ### OUTPUT INSTRUCTIONS
+    # Determine source from loaded fee_rules.json
+    source = "llm_re_extracted" if force else ("llm_extracted" if HIDDEN_COSTS else "default")
 
-    1. **Calculate**: Compute the exact fee for each of the 9 transaction sizes.
-    2. **Explain**: In `calculation_logic`, write the math for **EVERY** single amount.
-       - *Must Explain*: "Degiro: €2 Commission + €1 Handling = €3"
-       - *Must Explain*: "Bolero: €5,000 is > €2,500, so €15 per 10k slice applies = €15"
-    3. **Notes**: Populate the `notes` section with findings from a "Hidden Cost Scavenger Hunt" (Custody fees, connectivity fees, etc.).
-       - *Must Include*: "Any hidden costs like custody fees, connectivity fees, or platform fees must be noted here."
+    # Pricing coverage analysis
+    pricing_coverage = {
+        "total_tiers": len(pricing_tiers_found),
+        "brokers_covered": len(broker_names),
+        "asset_types": ["stocks", "etfs", "bonds"]
+    }
 
-    ### REQUIRED JSON STRUCTURE
+    result["_validation"] = {
+        "method": "deterministic",
+        "source": source,
+        "cells_computed": cells_computed,
+        "cells_with_data": cells_with_data,
+        "data_completeness_pct": round(data_completeness, 2),
+        "fee_rules_count": len(FEE_RULES),
+        "hidden_costs_brokers": len(HIDDEN_COSTS),
+        "lang": lang,
+        "pricing_coverage": pricing_coverage,
+        "persona_calculation_success": persona_success,
+    }
 
-    {{
-      "euronext_brussels": {{
-        "stocks": [ ... ],
-        "etfs": [ ... ],
-        "bonds": [ ... ],
-        "calculation_logic": {{ 
-          "Rebel": {{
-            "stocks": {{
-              "250": "Tier 1: Flat fee of €3 (<= €2,500)",
-              "500": "Tier 1: Flat fee of €3 (<= €2,500)",
-              "1000": "Tier 1: Flat fee of €3 (<= €2,500)",
-              "1500": "Tier 1: Flat fee of €3 (<= €2,500)",
-              "2000": "Tier 1: Flat fee of €3 (<= €2,500)",
-              "2500": "Tier 1: Flat fee of €3 (<= €2,500)",
-              "5000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
-              "10000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
-              "50000": "Slice Tier (>€2,500): 5 x €10k slices = €50"
-            }},
-            "etfs": {{
-              "250": "Tier 1: Flat fee of €1 (<= €250)",
-              "500": "Tier 2: Flat fee of €2 (<= €1,000)",
-              "1000": "Tier 3: Flat fee of €3 (<= €2,500)",
-              "1500": "Tier 3: Flat fee of €3 (<= €2,500)",
-              "2000": "Tier 3: Flat fee of €3 (<= €2,500)",
-              "2500": "Tier 3: Flat fee of €3 (<= €2,500)",
-              "5000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
-              "10000": "Slice Tier (>€2,500): 1st started €10k slice = €10",
-              "50000": "Slice Tier (>€2,500): 5 x €10k slices = €50"
-            }}
-         }},
-        "notes": {{
-          "Bolero": "Text...",
-          "Keytrade Bank": "Text...",
-          "Degiro Belgium": "Text...",
-          "ING Self Invest": "Text...",
-          "Rebel": "Text...",
-          "Revolut": "Text..."
-        }}
-      }}
-    }}
-    """
+    # Log metrics
+    logger.info(f"Deterministic computation complete: {cells_computed} cells computed, {cells_with_data} with data (lang={lang})")
+    logger.info(f"Data completeness: {data_completeness:.1f}% | Fee rules: {len(FEE_RULES)} | Hidden costs: {len(HIDDEN_COSTS)}")
+    logger.info(f"Pricing coverage: {len(pricing_tiers_found)} tiers across {len(broker_names)} brokers")
 
-    system_prompt = "You are a precise financial data analyst. You calculate exact transaction costs and return only valid JSON with numeric values."
+    # Add trace metadata for Langfuse
+    langfuse_context.update_current_observation(
+        metadata={
+            "model": model,
+            "lang": lang,
+            "force": force,
+            "cache_hit": False,
+            "cells_computed": cells_computed,
+            "cells_with_data": cells_with_data,
+            "data_completeness_pct": round(data_completeness, 2),
+            "fee_rules_count": len(FEE_RULES),
+            "hidden_costs_brokers": len(HIDDEN_COSTS),
+            "pricing_tiers": len(pricing_tiers_found),
+            "brokers_covered": len(broker_names),
+            "source": source,
+            "persona_success": persona_success,
+        }
+    )
+
+    # Add scores for data quality evaluation
+    langfuse_context.score_current_trace(name="data_completeness", value=data_completeness / 100)
+    langfuse_context.score_current_trace(name="broker_coverage", value=len(broker_names) / 6)  # Assuming 6 is max brokers
+    langfuse_context.score_current_trace(name="pricing_coverage", value=len(pricing_tiers_found) / 20)  # Assuming ~20 tiers is complete
+    langfuse_context.score_current_trace(name="persona_calculation", value=1.0 if persona_success else 0.0)
+
+    # Save the JSON response to output directory
+    output_dir = _default_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "cost_comparison_tables.json"
 
     try:
-        logger.info(f"📊 Analyzing {len(broker_names)} brokers: {', '.join(broker_names)}")
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+        logger.info(f"Saved cost comparison tables to: {output_path}")
+    except Exception as save_error:
+        logger.warning(f"Failed to save JSON response to file: {save_error}")
 
-        # Call the unified LLM helper
-        response_text = _call_llm(model, system_prompt, prompt, response_format="json")
+    # Cache the result
+    llm_cache.set(cache_key, result)
+    logger.info(f"Cached cost comparison tables (lang={lang})")
 
-        if not response_text:
-            raise HTTPException(status_code=500, detail="LLM returned an empty response.")
-
-        # Parse and validate response with Claude fallback
-        try:
-            result = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ JSON parsing failed for {model}: {e}")
-            logger.error(f"Response preview: {response_text[:500]}")
-
-            # If Claude failed, try with GPT-4o as fallback
-            if model.startswith("claude"):
-                logger.info("🔄 Retrying with GPT-4o due to JSON parsing failure...")
-                try:
-                    response_text = _call_llm("gpt-4o", system_prompt, prompt, response_format="json")
-                    result = json.loads(response_text)
-                    logger.info("✅ Successfully generated with GPT-4o fallback")
-                except Exception as fallback_error:
-                    logger.error(f"❌ Fallback to GPT-4o also failed: {fallback_error}")
-                    raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
-            else:
-                raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
+    return result
 
 
-        # Validation - Response should be grouped by exchanges (like "euronext_brussels", "usa", etc.)
-        logger.info(f"🔍 Validating response structure...")
+def _generate_broker_notes(model: str, cost_data: Dict[str, Any], broker_names: List[str], lang: str = "en") -> Dict[str, str]:
+    """Generate broker notes (hidden costs narrative) via LLM.
 
-        if not isinstance(result, dict):
-            raise ValueError("Response must be a JSON object")
+    Falls back to BROKER_NOTES on any failure.
+    """
+    language_name = _get_language_name(lang)
+    system_prompt = f"You are a financial analyst specializing in Belgian broker fees. Return ONLY valid JSON. Write all text in {language_name}."
 
-        # Expected exchanges - at least one should be present
-        found_exchanges = []
-        total_broker_entries = 0
+    broker_list = ", ".join(broker_names)
+    user_prompt = f"""Summarize hidden costs for each of these Belgian brokers: {broker_list}
 
-        for exchange_key, exchange_data in result.items():
-            if isinstance(exchange_data, dict):
-                found_exchanges.append(exchange_key)
+For each broker, write a 1-2 sentence note in {language_name} about hidden costs NOT reflected in transaction fees:
+- Custody/account fees
+- Connectivity fees (per exchange/year)
+- Currency exchange (FX) fees/margins
+- Platform/subscription fees
+- Dividend handling fees
 
-                # Check if this exchange has the expected structure
-                if "stocks" in exchange_data or "etfs" in exchange_data:
-                    logger.info(f"✅ Found valid exchange data for: {exchange_key}")
+Input data:
+{json.dumps(cost_data, indent=2)[:8000]}
 
-                    # Count and validate broker entries
-                    for asset_type in ["stocks", "etfs"]:
-                        if asset_type in exchange_data and isinstance(exchange_data[asset_type], list):
-                            total_broker_entries += len(exchange_data[asset_type])
+Return a JSON object mapping broker name to note string:
+{{"Broker Name": "Note about hidden costs...", ...}}
+"""
 
-                            # Validate each row has broker field
-                            for row in exchange_data[asset_type]:
-                                if not isinstance(row, dict) or "broker" not in row:
-                                    logger.warning(f"Invalid row structure in {exchange_key}.{asset_type}")
-                                    continue
-
-                                # Check for transaction sizes (optional validation)
-                                transaction_sizes = ["250", "500", "1000", "1500", "2000", "2500", "5000", "10000", "50000"]
-                                missing_sizes = [size for size in transaction_sizes if size not in row]
-                                if missing_sizes:
-                                    logger.warning(f"Row for {row.get('broker', 'unknown')} in '{exchange_key}.{asset_type}' missing sizes: {missing_sizes}")
-
-        if not found_exchanges:
-            raise ValueError("No valid exchange data found in response")
-
-        logger.info(f"✅ Successfully generated comparison tables for {len(found_exchanges)} exchanges with {total_broker_entries} broker entries")
-
-        # Validate fees against deterministic calculator
-        validation = validate_comparison_table(result)
-        validation_retries = 0
-        validation_method = "llm_validated" if validation.is_valid else "llm_unvalidated"
-
-        if not validation.is_valid:
-            logger.warning(
-                f"⚠️  Fee validation failed: {len(validation.errors)} errors out of {validation.checked} checks"
-            )
-            for err in validation.errors:
-                logger.warning(f"   {err.broker} {err.instrument} €{err.amount}: LLM={err.llm_value}, expected={err.expected_value}")
-
-            # Retry up to 2 times with correction feedback
-            for retry in range(2):
-                validation_retries = retry + 1
-                corrections = build_correction_prompt(validation.errors)
-                retry_prompt = prompt + "\n\n" + corrections
-                logger.info(f"🔄 Retry {validation_retries}/2 with {len(validation.errors)} correction(s)...")
-
-                response_text = _call_llm(model, system_prompt, retry_prompt, response_format="json")
-                try:
-                    result = json.loads(response_text)
-                except json.JSONDecodeError:
-                    logger.error(f"❌ JSON parsing failed on validation retry {validation_retries}")
-                    continue
-
-                validation = validate_comparison_table(result)
-                if validation.is_valid:
-                    validation_method = "llm_validated"
-                    logger.info(f"✅ Validation passed after {validation_retries} retry(ies)")
-                    break
-                else:
-                    logger.warning(f"⚠️  Retry {validation_retries} still has {len(validation.errors)} error(s)")
-
-            if not validation.is_valid:
-                # Final fallback: patch wrong values directly
-                logger.warning(f"⚠️  Patching {len(validation.errors)} remaining error(s) with deterministic values")
-                result = patch_table_with_corrections(result, validation.errors)
-                validation_method = "llm_patched"
-
-        # Add validation metadata
-        result["_validation"] = {
-            "method": validation_method,
-            "retries": validation_retries,
-            "cells_checked": validation.checked,
-            "cells_corrected": len(validation.errors) if validation_method == "llm_patched" else 0,
-        }
-
-        logger.info(f"✅ Validation complete: method={validation_method}, retries={validation_retries}, checked={validation.checked}")
-
-        # Save the JSON response to output directory
-        output_dir = _default_output_dir()
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create filename with timestamp and model name
-        from datetime import datetime
-        output_path = output_dir / f"cost_comparison_tables.json"
-
-        try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(result, f, indent=2, ensure_ascii=False)
-            logger.info(f"💾 Saved cost comparison tables to: {output_path}")
-        except Exception as save_error:
-            logger.warning(f"⚠️  Failed to save JSON response to file: {save_error}")
-
-        # Cache the result
-        llm_cache.set(cache_key, result)
-        logger.info(f"💾 Cached cost comparison tables for model: {model}")
-
-        return result
-
-    except json.JSONDecodeError as e:
-        logger.error(f"❌ JSON parsing failed: {e}")
-        logger.error(f"Response was: {response_text[:500]}")
-        raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
+    try:
+        response_text = _call_llm(model, system_prompt, user_prompt, response_format="json")
+        notes = json.loads(response_text)
+        if isinstance(notes, dict):
+            # Ensure all broker names are present
+            for name in broker_names:
+                display = _get_display_name(name)
+                if display not in notes:
+                    notes[display] = BROKER_NOTES.get(display, "")
+            return notes
     except Exception as e:
-        logger.error(f"❌ Failed to generate cost comparison tables: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to generate cost comparison tables: {e}")
+        logger.warning(f"LLM notes parsing failed: {e}")
+
+    # Fallback
+    return {_get_display_name(name): BROKER_NOTES.get(_get_display_name(name), "") for name in broker_names}
+
+
+def _localize_persona_definitions(model: str, persona_defs: Dict[str, Any], lang: str) -> Dict[str, Any]:
+    """Translate persona name and description fields using static translations.
+
+    Keeps all numeric/structural fields unchanged. Falls back to English for unknown languages.
+    """
+    import copy
+    localized = copy.deepcopy(persona_defs)
+
+    for persona_key, persona_data in localized.items():
+        trans = _PERSONA_TRANSLATIONS.get(lang, {}).get(persona_key)
+        if trans:
+            persona_data["name"] = trans["name"]
+            persona_data["description"] = trans["description"]
+
+    return localized
 
 
 @app.get("/financial-analysis")
 @time_api_call
+@observe(name="financial-analysis")
 def generate_financial_analysis(
         model: str = Query("claude-sonnet-4-20250514", description="LLM to use: claude-sonnet-4-20250514 (default), gpt-4o"),
-        force: bool = Query(False, description="Force fresh generation, ignore cache")
+        force: bool = Query(False, description="Force fresh generation, ignore cache"),
+        lang: str = Query("en", description="Response language: en, fr-be, nl-be")
 ) -> Dict[str, Any]:
     """
     Generate a comprehensive financial analysis comparing Belgian investment brokers.
@@ -684,12 +1028,16 @@ def generate_financial_analysis(
     Perfect for React/Vue/Angular apps to render with custom styling.
     """
     # Check cache first (unless force=True)
-    cache_key = FileCache.make_key("financial_analysis", model)
+    cache_key = FileCache.make_key("financial_analysis", model, lang)
     if not force:
         cached = llm_cache.get(cache_key)
         if cached:
-            logger.info(f"📦 Returning cached financial analysis for model: {model}")
+            logger.info(f"📦 Returning cached financial analysis for model: {model}, lang: {lang}")
+            langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": True})
             return cached
+
+    langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": False})
+    language_name = _get_language_name(lang)
 
     # ... (existing logic continues)
     cost_data = _get_cost_comparison_data()
@@ -704,7 +1052,7 @@ def generate_financial_analysis(
         )
 
     # Prepare comprehensive prompt for financial analysis
-    system_prompt = """
+    system_prompt = f"""
     Act as a Senior Financial Analyst and Investment Journalist specializing in the Euronext Brussels market. I need a structured, evidence-based investment memo on [INSERT TICKER/COMPANY NAME HERE] designed for a modern financial application (mobile-first, scannable).
 
 Your analysis must include:
@@ -720,6 +1068,8 @@ Bull vs. Bear: Three distinct, data-backed points for both the upside and downsi
 Valuation & Verdict: A clear rating (Buy/Hold/Sell) based on a specific valuation method (DCF or Peer Multiples).
 
 Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize hard data.
+
+IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles, summaries, pros, cons, bestFor, cost evidence descriptions) in {language_name}. Keep broker names, currency symbols (EUR/€), JSON keys, and numerical values unchanged.
     """
 
     # Create explicit list of all brokers
@@ -811,6 +1161,7 @@ Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize ha
     1. **Valid JSON Only**: No markdown formatting.
     2. **All Brokers**: Every list must contain exactly {len(broker_names)} entries.
     3. **Math Check**: Verify your "Active Trader" sums. (e.g. if fee is €3/trade, annual is ~€432, not €50).
+    4. **Language**: All human-readable text values MUST be in {language_name}. JSON keys must remain in English.
     """
 
     try:
@@ -825,13 +1176,16 @@ Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize ha
         # Parse JSON response with retry on failure
         try:
             result = json.loads(response_text)
+            langfuse_context.score_current_trace(name="json_valid", value=1)
         except json.JSONDecodeError as e:
+            langfuse_context.score_current_trace(name="json_valid", value=0)
             logger.error(f"❌ JSON parsing failed: {e}")
             logger.error(f"Response preview: {response_text[:500]}")
 
             # If Claude failed, try with GPT-4o as fallback
             if model.startswith("claude"):
                 logger.info("🔄 Retrying with GPT-4o due to JSON parsing failure...")
+                langfuse_context.score_current_trace(name="required_fallback", value=1)
                 try:
                     response_text = _call_llm("gpt-4o", system_prompt, user_prompt, response_format="json")
                     result = json.loads(response_text)
@@ -851,6 +1205,9 @@ Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize ha
         # Expected exchanges - at least one should be present
         found_exchanges = []
         total_broker_entries = 0
+        pricing_data_completeness = 0
+        all_tier_counts = {}
+        fallback_used = False
 
         for exchange_key, exchange_data in result.items():
             if isinstance(exchange_data, dict):
@@ -861,6 +1218,7 @@ Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize ha
                     logger.info(f"✅ Found valid exchange data for: {exchange_key}")
 
                     # Count and validate broker entries
+                    tier_counts = {}
                     for asset_type in ["stocks", "etfs"]:
                         if asset_type in exchange_data and isinstance(exchange_data[asset_type], list):
                             total_broker_entries += len(exchange_data[asset_type])
@@ -876,6 +1234,12 @@ Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize ha
                                 missing_sizes = [size for size in transaction_sizes if size not in row]
                                 if missing_sizes:
                                     logger.warning(f"Row for {row.get('broker', 'unknown')} in '{exchange_key}.{asset_type}' missing sizes: {missing_sizes}")
+                                else:
+                                    tier_counts[row.get('broker', 'unknown')] = len(transaction_sizes)
+
+                    if tier_counts:
+                        all_tier_counts[asset_type] = tier_counts
+                        pricing_data_completeness = (len(tier_counts) / max(1, len(transaction_sizes))) * 100
 
         if not found_exchanges:
             raise ValueError("No valid exchange data found in response")
@@ -904,14 +1268,43 @@ Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize ha
         llm_cache.set(cache_key, result)
         logger.info(f"💾 Cached financial analysis for model: {model}")
 
+        # Add detailed tracing metadata
+        langfuse_context.update_current_observation(
+            output={
+                "exchanges_found": len(found_exchanges),
+                "broker_entries": total_broker_entries,
+                "pricing_completeness_pct": round(pricing_data_completeness, 2),
+            },
+            metadata={
+                "model": model,
+                "lang": lang,
+                "force": force,
+                "cache_hit": False,
+                "exchanges": found_exchanges,
+                "total_broker_entries": total_broker_entries,
+                "pricing_completeness": round(pricing_data_completeness, 2),
+                "fallback_used": fallback_used,
+                "output_file": output_filename,
+            }
+        )
+
+        # Add quality scores
+        langfuse_context.score_current_trace(name="response_validity", value=1.0)
+        langfuse_context.score_current_trace(name="data_completeness", value=pricing_data_completeness / 100)
+        langfuse_context.score_current_trace(name="broker_coverage", value=min(total_broker_entries / 50, 1.0))  # Normalized to 50 entries
+        langfuse_context.score_current_trace(name="fallback_required", value=0.0 if not fallback_used else 1.0)
+
         return result
 
     except json.JSONDecodeError as e:
         logger.error(f"❌ JSON parsing failed: {e}")
         logger.error(f"Response was: {response_text[:500]}")
+        # Log fallback score
+        langfuse_context.score_current_trace(name="response_validity", value=0.0)
         raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
     except Exception as e:
         logger.error(f"❌ Failed to generate financial analysis: {e}", exc_info=True)
+        langfuse_context.score_current_trace(name="response_validity", value=0.0)
         raise HTTPException(status_code=500, detail=f"Failed to generate financial analysis: {e}")
 
 
@@ -1093,6 +1486,7 @@ def get_summary() -> str:
 
 @app.post("/refresh-and-analyze")
 @time_api_call
+@observe(name="refresh-and-analyze")
 def refresh_and_analyze(
         brokers_to_process: Optional[List[str]] = Query(None,
                                                         description="Specific brokers to analyze (if None, analyzes all)"),
@@ -1106,6 +1500,8 @@ def refresh_and_analyze(
     Supports both OpenAI (gpt-*) and Anthropic (claude-*) models.
     """
     import time
+
+    langfuse_context.update_current_observation(metadata={"model": model, "force": force})
 
     logger.info("=" * 80)
     logger.info("🚀 REFRESH AND ANALYZE REQUEST")
@@ -1243,11 +1639,17 @@ Return ONLY a valid JSON object with structured fee data.
 
             if not response_text or not response_text.strip().startswith('{'):
                 logger.error(f"  ❌ Invalid response for {broker_name}")
+                langfuse_context.score_current_trace(name="json_valid", value=0)
                 all_analyses[broker_name] = {"error": "Invalid LLM response"}
             else:
-                analysis = json.loads(response_text)
-                all_analyses[broker_name] = analysis
-                logger.info(f"  ✅ {broker_name} analysis complete")
+                try:
+                    analysis = json.loads(response_text)
+                    langfuse_context.score_current_trace(name="json_valid", value=1)
+                    all_analyses[broker_name] = analysis
+                    logger.info(f"  ✅ {broker_name} analysis complete")
+                except json.JSONDecodeError:
+                    langfuse_context.score_current_trace(name="json_valid", value=0)
+                    all_analyses[broker_name] = {"error": "Invalid JSON from LLM"}
 
         except Exception as e:
             logger.error(f"  ❌ Analysis failed for {broker_name}: {e}")
@@ -1268,12 +1670,28 @@ Return ONLY a valid JSON object with structured fee data.
         logger.error(f"❌ Failed to save analysis: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save analysis: {e}")
 
+    # Step 6: Extract fee rules from freshly scraped data (per-broker)
+    fee_rules_diff = []
+    try:
+        old_rules = dict(FEE_RULES)
+        new_rules = _extract_fee_rules_from_cost_data(all_analyses, model)
+        if new_rules:
+            fee_rules_diff = get_rules_diff(old_rules, new_rules)
+            if fee_rules_diff:
+                logger.info(f"Fee rules changed: {fee_rules_diff}")
+            # Merge new rules into existing (preserves rules for brokers that weren't scraped)
+            FEE_RULES.update(new_rules)
+            save_fee_rules(source="llm_extracted")
+            logger.info(f"Saved {len(FEE_RULES)} fee rules and {len(HIDDEN_COSTS)} hidden cost entries")
+    except Exception as e:
+        logger.warning(f"Fee rule extraction failed (non-fatal): {e}")
+
     # Return comprehensive results
     logger.info("=" * 80)
-    logger.info("✅ REFRESH AND ANALYZE COMPLETE")
+    logger.info("REFRESH AND ANALYZE COMPLETE")
     logger.info("=" * 80)
 
-    return {
+    response_data = {
         "status": "completed",
         "refresh_results": refresh_results,
         "analysis_results": {
@@ -1282,8 +1700,174 @@ Return ONLY a valid JSON object with structured fee data.
             "model_used": model,
             "analyses": all_analyses
         },
-        "output_file": str(json_output_path)
+        "output_file": str(json_output_path),
     }
+
+    if fee_rules_diff:
+        response_data["fee_rules_changes"] = fee_rules_diff
+
+    return response_data
+
+
+def _extract_fee_rules_from_cost_data(cost_data: Dict[str, Any], model: str) -> Optional[Dict[tuple, FeeRule]]:
+    """Extract structured fee rules + hidden costs from broker cost analysis data via LLM.
+
+    Processes each broker individually to avoid truncation issues.
+    Returns a dict of FeeRule objects, or None if extraction fails for all brokers.
+    Also populates HIDDEN_COSTS global registry.
+    """
+    system_prompt = "You are a financial data extractor specializing in Belgian broker fee structures. Return ONLY valid JSON."
+
+    all_rules: Dict[tuple, FeeRule] = {}
+    brokers_succeeded = []
+    brokers_failed = []
+
+    for broker_name, broker_data in cost_data.items():
+        if not isinstance(broker_data, dict) or "error" in broker_data:
+            logger.warning(f"Skipping {broker_name}: invalid or error data")
+            continue
+
+        logger.info(f"Extracting fee rules for {broker_name}...")
+
+        user_prompt = f"""Extract ALL fee rules and hidden costs for {broker_name} on Euronext Brussels.
+
+Extract:
+1. TRADING RULES: The exact fee structure with pattern type and all tier thresholds
+2. HIDDEN COSTS: Custody fees, connectivity fees, FX fees, dividend fees, subscription fees
+
+Input data for {broker_name}:
+{json.dumps(broker_data, indent=2)}
+
+Return a JSON object with EXACTLY this structure:
+
+{{
+  "rules": [
+    {{
+      "broker": "{broker_name}",
+      "instrument": "stocks",
+      "pattern": "pattern_type",
+      "tiers": [...],
+      "handling_fee": 0.0
+    }}
+  ],
+  "hidden_costs": {{
+    "{broker_name}": {{
+      "custody_fee_monthly_pct": 0.0,
+      "custody_fee_monthly_min": 0.0,
+      "connectivity_fee_per_exchange_year": 0.0,
+      "connectivity_fee_max_pct_account": 0.0,
+      "subscription_fee_monthly": 0.0,
+      "fx_fee_pct": 0.0,
+      "handling_fee_per_trade": 0.0,
+      "dividend_fee_pct": 0.0,
+      "dividend_fee_min": 0.0,
+      "dividend_fee_max": 0.0,
+      "notes": "Brief description of hidden costs"
+    }}
+  }}
+}}
+
+PATTERN TYPES (use exactly these strings):
+- "flat": Simple flat fee for all amounts (e.g., Degiro EUR2 + EUR1 handling)
+- "tiered_flat": Multiple flat fee tiers by amount (only up_to tiers, no slice)
+- "tiered_flat_then_slice": Flat tiers for small amounts, per-slice for larger amounts (Bolero, Keytrade, Rebel)
+- "percentage_with_min": Percentage rate with minimum fee (ING, Revolut)
+- "base_plus_slice": Single base fee threshold + per-slice for remainder
+
+TIER TYPES:
+- {{"flat": 2.00}} - simple flat fee
+- {{"up_to": 2500, "fee": 7.50}} - flat fee for amounts up to threshold
+- {{"per_slice": 10000, "fee": 15.00}} - per-started-slice (no up_to means it applies after all flat tiers)
+- {{"per_slice": 10000, "fee": 15.00, "max_fee": 50.00}} - per-slice with fee cap
+- {{"rate": 0.0035, "min_fee": 1.00}} - percentage rate with minimum
+
+IMPORTANT:
+- Extract ALL tiers from the data. Many brokers have 4-5 tiers, not just 2.
+- Include "max_fee" on the per_slice tier if the broker caps total commission.
+- Include rules for stocks, etfs, AND bonds where the data is available.
+- Use exact broker name: {broker_name}
+- Extract the STANDARD fee schedule, not promotional or conditional rates.
+  For example, Degiro has a "Core Selection" of ETFs with zero commission, but
+  the standard ETF fee on Euronext Brussels is EUR2 + EUR1 handling (same as stocks).
+  Always use the standard/default rate that applies to ALL instruments of that type.
+- A rule where ALL fees are EUR 0.00 is almost certainly wrong. If fees appear
+  to be zero, double-check whether a separate handling fee or commission applies.
+"""
+
+        try:
+            response_text = _call_llm(model, system_prompt, user_prompt, response_format="json")
+            data = json.loads(response_text)
+            rules_list = data.get("rules", [])
+
+            broker_rule_count = 0
+            for rule_dict in rules_list:
+                broker = rule_dict.get("broker", "")
+                instrument = rule_dict.get("instrument", "")
+                if not broker or not instrument:
+                    continue
+                rule = FeeRule(
+                    broker=broker,
+                    instrument=instrument,
+                    pattern=rule_dict.get("pattern", "unknown"),
+                    tiers=rule_dict.get("tiers", []),
+                    handling_fee=rule_dict.get("handling_fee", 0.0),
+                    min_fee=rule_dict.get("min_fee"),
+                    max_fee=rule_dict.get("max_fee"),
+                )
+                all_rules[(broker.lower(), instrument.lower())] = rule
+                broker_rule_count += 1
+
+            # Load hidden costs for this broker
+            hidden_costs_data = data.get("hidden_costs", {})
+            for hc_name, costs_dict in hidden_costs_data.items():
+                if isinstance(costs_dict, dict):
+                    HIDDEN_COSTS[hc_name] = HiddenCosts(
+                        custody_fee_monthly_pct=costs_dict.get("custody_fee_monthly_pct", 0.0),
+                        custody_fee_monthly_min=costs_dict.get("custody_fee_monthly_min", 0.0),
+                        connectivity_fee_per_exchange_year=costs_dict.get("connectivity_fee_per_exchange_year", 0.0),
+                        connectivity_fee_max_pct_account=costs_dict.get("connectivity_fee_max_pct_account", 0.0),
+                        subscription_fee_monthly=costs_dict.get("subscription_fee_monthly", 0.0),
+                        fx_fee_pct=costs_dict.get("fx_fee_pct", 0.0),
+                        handling_fee_per_trade=costs_dict.get("handling_fee_per_trade", 0.0),
+                        dividend_fee_pct=costs_dict.get("dividend_fee_pct", 0.0),
+                        dividend_fee_min=costs_dict.get("dividend_fee_min", 0.0),
+                        dividend_fee_max=costs_dict.get("dividend_fee_max", 0.0),
+                        notes=costs_dict.get("notes", ""),
+                    )
+
+            # QA check: warn if any extracted rule produces 0 for all sizes
+            from ..validation.fee_calculator import _compute_from_tiers, TRANSACTION_SIZES as TS
+            for (bk, ik), rule in list(all_rules.items()):
+                if bk == broker_name.lower():
+                    all_zero = all(
+                        _compute_from_tiers(rule.tiers, amt, rule.handling_fee, rule.max_fee) == 0.0
+                        for amt in TS
+                    )
+                    if all_zero:
+                        langfuse_context.score_current_trace(name="all_zero_fees", value=1)
+                        logger.warning(
+                            f"  QA WARNING: {rule.broker} {rule.instrument} extracted with all-zero fees. "
+                            f"Tiers: {rule.tiers}. This rule will be skipped."
+                        )
+                        del all_rules[(bk, ik)]
+                        broker_rule_count -= 1
+
+            brokers_succeeded.append(broker_name)
+            logger.info(f"  {broker_name}: extracted {broker_rule_count} rules")
+
+        except Exception as e:
+            brokers_failed.append(broker_name)
+            logger.warning(f"  {broker_name}: extraction failed: {e}")
+
+    logger.info(
+        f"Fee rule extraction complete: {len(all_rules)} rules from "
+        f"{len(brokers_succeeded)} brokers. Failed: {brokers_failed or 'none'}"
+    )
+
+    if all_rules:
+        return all_rules
+
+    return None
 
 
 # ========================================================================================
@@ -1292,6 +1876,7 @@ Return ONLY a valid JSON object with structured fee data.
 
 @app.post("/news/scrape")
 @time_api_call
+@observe(name="news-scrape")
 def scrape_news_endpoint(
     brokers_to_scrape: Optional[List[str]] = Query(None, description="Specific brokers to scrape (if None, scrapes all with news_sources)"),
     force: bool = Query(False, description="Force fresh scrape, ignore cache"),
@@ -1313,6 +1898,18 @@ def scrape_news_endpoint(
                 logger.info(f"📦 Returning cached news scrape results")
                 cached["duration_seconds"] = round(time.time() - start_time, 2)
                 cached["from_cache"] = True
+
+                # Add tracing for cache hit
+                langfuse_context.update_current_observation(
+                    metadata={
+                        "force": force,
+                        "cache_hit": True,
+                        "brokers_requested": brokers_to_scrape,
+                        "cached_items": cached.get("total_scraped", 0),
+                    }
+                )
+                langfuse_context.score_current_trace(name="cache_efficiency", value=1.0)
+
                 return cached
 
         # Load brokers configuration
@@ -1390,6 +1987,11 @@ def scrape_news_endpoint(
             for news in scraped_news
         ]
 
+        # Calculate metrics for tracing
+        scrape_success_rate = (len(broker_summary) / len(brokers_to_process) * 100) if brokers_to_process else 0
+        news_items_per_broker = len(scraped_news) / max(len(broker_summary), 1) if broker_summary else 0
+        error_count = len(error_summary)
+
         response = {
             "status": "success",
             "message": f"Successfully scraped {len(scraped_news)} news items from {len(broker_summary)} brokers",
@@ -1408,12 +2010,39 @@ def scrape_news_endpoint(
         # Cache the result
         news_cache.set(cache_key, response)
 
+        # Add tracing metadata
+        langfuse_context.update_current_observation(
+            output={
+                "total_news_items": len(scraped_news),
+                "brokers_with_news": len(broker_summary),
+                "scrape_success_rate": round(scrape_success_rate, 1),
+                "avg_items_per_broker": round(news_items_per_broker, 2),
+            },
+            metadata={
+                "force": force,
+                "brokers_requested": brokers_to_scrape,
+                "brokers_processed": len(brokers_to_process),
+                "brokers_with_news": len(broker_summary),
+                "total_news_items": len(scraped_news),
+                "errors": error_count,
+                "duration_seconds": duration,
+                "cache_hit": False,
+                "scrape_success_rate_pct": round(scrape_success_rate, 1),
+            }
+        )
+
+        # Add quality scores
+        langfuse_context.score_current_trace(name="scrape_coverage", value=scrape_success_rate / 100)
+        langfuse_context.score_current_trace(name="news_volume", value=min(len(scraped_news) / 20, 1.0))  # Normalize to 20 items
+        langfuse_context.score_current_trace(name="error_rate", value=1.0 - (error_count / max(len(brokers_to_process), 1)))
+
         return response
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ News scraping failed: {e}", exc_info=True)
+        langfuse_context.score_current_trace(name="scrape_coverage", value=0.0)
         raise HTTPException(status_code=500, detail=f"News scraping failed: {str(e)}")
 
 
@@ -1562,3 +2191,316 @@ def delete_news_endpoint(request: NewsDeleteRequest) -> Dict[str, str]:
     except Exception as e:
         logger.error(f"❌ Failed to delete news flash: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete news flash: {str(e)}")
+
+
+# ========================================================================================
+# CHATBOT ENDPOINT
+# ========================================================================================
+
+_chat_context_cache: Dict[str, Any] = {"text": None, "expires_at": 0.0}
+
+
+def _build_chat_context() -> str:
+    """Build a compact text summary of all broker data for LLM context."""
+    _ensure_rules_loaded()
+
+    lines: List[str] = []
+
+    # Fee rules per broker/instrument
+    lines.append("## Fee Rules")
+    grouped: Dict[str, List[str]] = {}
+    for (broker_key, instr_key), rule in sorted(FEE_RULES.items()):
+        display = _get_display_name(broker_key)
+        desc = f"  {instr_key}: pattern={rule.pattern}, tiers={rule.tiers}"
+        if rule.handling_fee > 0:
+            desc += f", handling=EUR{rule.handling_fee:.2f}"
+        if rule.max_fee is not None:
+            desc += f", max_fee=EUR{rule.max_fee:.2f}"
+        grouped.setdefault(display, []).append(desc)
+
+    for broker_display, descs in sorted(grouped.items()):
+        lines.append(f"\n{broker_display}:")
+        lines.extend(descs)
+
+    # Comparison table matrices
+    lines.append("\n## Comparison Tables (transaction fee in EUR)")
+    try:
+        broker_names = list(set(rule.broker for rule in FEE_RULES.values()))
+        tables = build_comparison_tables(broker_names)
+        eb = tables.get("euronext_brussels", {})
+        for asset_type in ["stocks", "etfs", "bonds"]:
+            asset_data = eb.get(asset_type, {})
+            if asset_data:
+                lines.append(f"\n### {asset_type.upper()}")
+                for broker_display, fees in sorted(asset_data.items()):
+                    fee_str = ", ".join(f"EUR{k}={v}" for k, v in sorted(fees.items(), key=lambda x: int(x[0])))
+                    lines.append(f"  {broker_display}: {fee_str}")
+    except Exception as e:
+        lines.append(f"  (table build failed: {e})")
+
+    # Hidden costs
+    lines.append("\n## Hidden Costs")
+    for broker_name, costs in sorted(HIDDEN_COSTS.items()):
+        parts = []
+        if costs.custody_fee_monthly_pct > 0:
+            parts.append(f"custody={costs.custody_fee_monthly_pct}%/mo")
+        if costs.connectivity_fee_per_exchange_year > 0:
+            parts.append(f"connectivity=EUR{costs.connectivity_fee_per_exchange_year:.2f}/exch/yr")
+        if costs.subscription_fee_monthly > 0:
+            parts.append(f"subscription=EUR{costs.subscription_fee_monthly:.2f}/mo")
+        if costs.fx_fee_pct > 0:
+            parts.append(f"FX={costs.fx_fee_pct}%")
+        if costs.handling_fee_per_trade > 0:
+            parts.append(f"handling=EUR{costs.handling_fee_per_trade:.2f}/trade")
+        if costs.dividend_fee_pct > 0:
+            parts.append(f"dividend={costs.dividend_fee_pct}%")
+        if not parts:
+            parts.append("none significant")
+        lines.append(f"  {broker_name}: {', '.join(parts)}")
+
+    # Persona TCO rankings
+    lines.append("\n## Investor Persona TCO Rankings")
+    try:
+        from ..validation.persona_calculator import PERSONAS, compute_persona_costs
+        broker_names_for_persona = list(set(rule.broker for rule in FEE_RULES.values()))
+        for persona_key, persona_def in PERSONAS.items():
+            results = []
+            for broker in broker_names_for_persona:
+                result = compute_persona_costs(broker, persona_key)
+                if result is not None:
+                    results.append(result)
+            results.sort(key=lambda r: r.total_annual_tco)
+            lines.append(f"\n### {persona_def.name} ({persona_def.description})")
+            for i, r in enumerate(results, 1):
+                lines.append(f"  {i}. {r.broker}: EUR{r.total_annual_tco:.2f}/yr")
+    except Exception as e:
+        lines.append(f"  (persona calculation failed: {e})")
+
+    return "\n".join(lines)
+
+
+def _get_chat_context() -> str:
+    """Caching wrapper for _build_chat_context with 5-minute TTL."""
+    now = time.time()
+    if _chat_context_cache["text"] is not None and now < _chat_context_cache["expires_at"]:
+        return _chat_context_cache["text"]
+
+    text = _build_chat_context()
+    _chat_context_cache["text"] = text
+    _chat_context_cache["expires_at"] = now + 300  # 5 minutes
+    return text
+
+
+def _precompute_fee_calculations(question: str) -> Optional[Dict[str, Any]]:
+    """Extract broker names, instruments, and EUR amounts from the question.
+
+    Runs calculate_fee() + generate_explanation() for matches and returns
+    pre-computed results to inject into the system prompt.
+    """
+    _ensure_rules_loaded()
+
+    # Extract EUR amounts (e.g., EUR5000, EUR 5000, 5000 euro, €5000)
+    amount_pattern = r'(?:EUR\s?|€)\s?([\d,]+(?:\.\d+)?)|(\d[\d,]+(?:\.\d+)?)\s*(?:euro|EUR|€)'
+    amount_matches = re.findall(amount_pattern, question, re.IGNORECASE)
+    amounts = []
+    for m in amount_matches:
+        raw = m[0] or m[1]
+        raw = raw.replace(",", "")
+        try:
+            amounts.append(float(raw))
+        except ValueError:
+            pass
+
+    if not amounts:
+        return None
+
+    # Extract broker names
+    question_lower = question.lower()
+    found_brokers = []
+    for alias, canonical in sorted(BROKER_ALIASES.items(), key=lambda x: -len(x[0])):
+        if alias in question_lower and canonical not in found_brokers:
+            found_brokers.append(canonical)
+
+    if not found_brokers:
+        # Use all brokers if none specifically mentioned
+        found_brokers = list(set(rule.broker.lower() for rule in FEE_RULES.values()))
+
+    # Detect instruments mentioned
+    instruments = []
+    for keyword, instrument in [("stock", "stocks"), ("etf", "etfs"), ("bond", "bonds"),
+                                 ("aandeel", "stocks"), ("tracker", "etfs"), ("obligatie", "bonds")]:
+        if keyword in question_lower:
+            instruments.append(instrument)
+    if not instruments:
+        instruments = ["stocks", "etfs"]  # default
+
+    # Compute fees
+    results: Dict[str, Any] = {}
+    for broker in found_brokers:
+        display = _get_display_name(broker)
+        broker_results = {}
+        for instrument in instruments:
+            for amount in amounts:
+                fee = calculate_fee(broker, instrument, amount)
+                if fee is not None:
+                    explanation = generate_explanation(broker, instrument, amount)
+                    key = f"{instrument}_EUR{int(amount)}"
+                    broker_results[key] = {
+                        "fee": fee,
+                        "explanation": explanation,
+                    }
+        if broker_results:
+            results[display] = broker_results
+
+    return results if results else None
+
+
+CHAT_SYSTEM_PROMPT_TEMPLATE = """You are a helpful assistant specializing in Belgian broker fees and investment costs.
+You help users compare brokers on Euronext Brussels: Degiro Belgium, Bolero, Keytrade Bank, ING Self Invest, Rebel, and Revolut.
+
+## Data Context
+{context}
+
+## Pre-Computed Fee Calculations
+{pre_computed}
+
+## Instructions
+- When pre-computed calculations are provided above, use those EXACT EUR amounts. Do NOT re-calculate or approximate.
+- Be precise with EUR amounts — always show 2 decimal places (e.g., EUR7.50, not "about EUR8").
+- Consider BOTH transaction fees AND hidden costs (custody, connectivity, FX, dividends) when comparing total cost.
+- When asked "which is cheapest", check the comparison tables or pre-computed results rather than guessing.
+- Answer concisely but completely. Use bullet points for comparisons.
+- If you don't have data for a specific scenario, say so rather than guessing.
+- You MUST respond in {language}. All explanations, comparisons, and advice must be in {language}. Keep broker names, EUR amounts, and technical terms unchanged.
+"""
+
+
+@app.post("/chat")
+@time_api_call
+@observe(name="chat")
+def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
+    """
+    Chatbot endpoint for natural language questions about Belgian broker fees.
+
+    Accepts a question, optional conversation history, and optional model.
+    Pre-computes specific fee calculations when amounts are mentioned.
+    """
+    model = request.model or "groq/llama-3.3-70b-versatile"
+    fallback_model = "gemini-2.0-flash"
+    language_name = _get_language_name(request.lang or "en")
+    langfuse_context.update_current_observation(metadata={"model": model, "lang": request.lang or "en"})
+
+    # Build context
+    context = _get_chat_context()
+
+    # Pre-compute specific fee calculations from the question
+    pre_computed = _precompute_fee_calculations(request.question)
+    pre_computed_text = "None (general question)" if pre_computed is None else json.dumps(pre_computed, indent=2)
+
+    # Build system prompt
+    system_prompt = CHAT_SYSTEM_PROMPT_TEMPLATE.format(
+        context=context,
+        pre_computed=pre_computed_text,
+        language=language_name,
+    )
+
+    # Build conversation messages
+    conv_messages: List[dict] = []
+    if request.history:
+        for msg in request.history:
+            conv_messages.append({"role": msg.role, "content": msg.content})
+    conv_messages.append({"role": "user", "content": request.question})
+
+    llm_kwargs = dict(
+        system_prompt=system_prompt,
+        user_prompt=request.question,
+        response_format="text",
+        temperature=0.3,
+        messages=conv_messages,
+    )
+
+    # Track pre-computed metrics
+    has_pre_computed = pre_computed is not None
+    num_pre_computed_items = len(pre_computed) if has_pre_computed else 0
+    has_conversation_history = request.history is not None and len(request.history) > 0
+
+    try:
+        answer = _call_llm(model=model, **llm_kwargs)
+        used_model = model
+        fallback_required = False
+    except Exception as e:
+        fallback_required = True
+        if model != fallback_model:
+            logger.warning(f"Primary model {model} failed, falling back to {fallback_model}: {e}")
+            try:
+                answer = _call_llm(model=fallback_model, **llm_kwargs)
+                used_model = fallback_model
+            except Exception as fallback_err:
+                logger.error(f"Fallback model {fallback_model} also failed: {fallback_err}", exc_info=True)
+                langfuse_context.update_current_observation(
+                    metadata={
+                        "model": model,
+                        "lang": request.lang or "en",
+                        "fallback_required": True,
+                        "fallback_failed": True,
+                        "error": str(fallback_err),
+                    }
+                )
+                langfuse_context.score_current_trace(name="answer_quality", value=0.0)
+                raise HTTPException(status_code=500, detail=f"All models failed. Primary: {e} | Fallback: {fallback_err}")
+        else:
+            logger.error(f"Chat endpoint failed: {e}", exc_info=True)
+            langfuse_context.update_current_observation(
+                metadata={
+                    "model": model,
+                    "lang": request.lang or "en",
+                    "fallback_required": True,
+                    "error": str(e),
+                }
+            )
+            langfuse_context.score_current_trace(name="answer_quality", value=0.0)
+            raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+    # Calculate answer quality metrics
+    answer_length = len(answer) if answer else 0
+    has_specific_amounts = any(c.isdigit() or '€' in answer or 'EUR' in answer for c in answer)
+
+    # Update tracing with final metadata
+    langfuse_context.update_current_observation(
+        output=answer,
+        metadata={
+            "model": model,
+            "lang": request.lang or "en",
+            "used_model": used_model,
+            "fallback_required": fallback_required,
+            "has_pre_computed": has_pre_computed,
+            "num_pre_computed_items": num_pre_computed_items,
+            "has_history": has_conversation_history,
+            "answer_length": answer_length,
+            "has_specific_amounts": has_specific_amounts,
+            "conversation_turns": len(conv_messages),
+        }
+    )
+
+    # Add quality scores
+    answer_quality = min(answer_length / 500, 1.0)  # Longer answers tend to be more detailed
+    langfuse_context.score_current_trace(name="answer_quality", value=answer_quality)
+    langfuse_context.score_current_trace(name="answer_specificity", value=1.0 if has_specific_amounts else 0.5)
+    langfuse_context.score_current_trace(name="pre_computed_usage", value=1.0 if has_pre_computed else 0.0)
+    langfuse_context.score_current_trace(name="fallback_required", value=1.0 if fallback_required else 0.0)
+
+    return {
+        "answer": answer,
+        "model_used": used_model,
+        "pre_computed": pre_computed,
+    }
+
+
+# ========================================================================================
+# LANGFUSE SHUTDOWN
+# ========================================================================================
+
+@app.on_event("shutdown")
+def _flush_langfuse():
+    """Ensure all Langfuse traces are sent before the process exits."""
+    langfuse_context.flush()
