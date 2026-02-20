@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .fee_calculator import calculate_fee
+from .fee_calculator import calculate_fee, generate_explanation
 
 logger = logging.getLogger(__name__)
 
@@ -58,41 +58,7 @@ def _extract_numeric(value) -> Optional[float]:
 
 def _explain_fee(broker: str, instrument: str, amount: float, expected: float) -> str:
     """Generate a human-readable explanation of how the expected fee was calculated."""
-    broker_lower = broker.lower()
-    if "degiro" in broker_lower:
-        return f"€2 commission + €1 handling fee = €{expected:.2f}"
-    if "bolero" in broker_lower:
-        if amount <= 2500:
-            return f"€{amount:.0f} <= €2,500 threshold: flat fee €{expected:.2f}"
-        slices = __import__("math").ceil(amount / 10000)
-        return f"€{amount:.0f} > €2,500: {slices} started €10k slice(s) × €15 = €{expected:.2f}"
-    if "keytrade" in broker_lower:
-        if amount <= 10000:
-            return f"€{amount:.0f} <= €10,000: base fee €{expected:.2f}"
-        remainder = amount - 10000
-        slices = __import__("math").ceil(remainder / 10000)
-        return f"€14.95 base + {slices} × €7.50 (€{remainder:.0f} remainder / €10k slices) = €{expected:.2f}"
-    if "ing" in broker_lower:
-        raw = amount * 0.0035
-        if raw < 1.0:
-            return f"€{amount:.0f} × 0.35% = €{raw:.2f} < €1.00 minimum → €{expected:.2f}"
-        return f"€{amount:.0f} × 0.35% = €{expected:.2f}"
-    if "rebel" in broker_lower:
-        if instrument == "etfs":
-            if amount <= 250:
-                return f"ETF tier: €{amount:.0f} <= €250 → €{expected:.2f}"
-            if amount <= 1000:
-                return f"ETF tier: €{amount:.0f} <= €1,000 → €{expected:.2f}"
-            if amount <= 2500:
-                return f"ETF tier: €{amount:.0f} <= €2,500 → €{expected:.2f}"
-            slices = __import__("math").ceil(amount / 10000)
-            return f"ETF slice tier: {slices} started €10k slice(s) × €10 = €{expected:.2f}"
-        else:
-            if amount <= 2500:
-                return f"€{amount:.0f} <= €2,500: flat fee €{expected:.2f}"
-            slices = __import__("math").ceil(amount / 10000)
-            return f"€{amount:.0f} > €2,500: {slices} started €10k slice(s) × €10 = €{expected:.2f}"
-    return f"Expected fee: €{expected:.2f}"
+    return generate_explanation(broker, instrument, amount)
 
 
 def validate_comparison_table(table_data: dict) -> ValidationResult:
@@ -122,16 +88,24 @@ def validate_comparison_table(table_data: dict) -> ValidationResult:
         for asset_type in ASSET_TYPES:
             if asset_type not in exchange_data:
                 continue
-            rows = exchange_data[asset_type]
-            if not isinstance(rows, list):
+            asset_data = exchange_data[asset_type]
+
+            # Support both array format [{"broker": "X", "250": ...}]
+            # and dict format {"X": {"250": ...}}
+            if isinstance(asset_data, list):
+                rows = []
+                for row in asset_data:
+                    if isinstance(row, dict) and "broker" in row:
+                        rows.append((row["broker"], row))
+            elif isinstance(asset_data, dict):
+                rows = []
+                for broker_name, fee_dict in asset_data.items():
+                    if isinstance(fee_dict, dict):
+                        rows.append((broker_name, fee_dict))
+            else:
                 continue
 
-            for row in rows:
-                if not isinstance(row, dict) or "broker" not in row:
-                    continue
-
-                broker = row["broker"]
-
+            for broker, row in rows:
                 for size_str in TRANSACTION_SIZES:
                     if size_str not in row:
                         continue
@@ -220,15 +194,22 @@ def patch_table_with_corrections(table_data: dict, errors: List[ValidationError]
         for asset_type in ASSET_TYPES:
             if asset_type not in exchange_data:
                 continue
-            rows = exchange_data[asset_type]
-            if not isinstance(rows, list):
+            asset_data = exchange_data[asset_type]
+
+            # Support both array format and dict format
+            if isinstance(asset_data, list):
+                items = []
+                for row in asset_data:
+                    if isinstance(row, dict) and "broker" in row:
+                        items.append((row["broker"], row))
+            elif isinstance(asset_data, dict):
+                items = [(broker_name, fee_dict) for broker_name, fee_dict in asset_data.items()
+                         if isinstance(fee_dict, dict)]
+            else:
                 continue
 
-            for row in rows:
-                if not isinstance(row, dict) or "broker" not in row:
-                    continue
-
-                broker_lower = row["broker"].lower()
+            for broker_name, row in items:
+                broker_lower = broker_name.lower()
                 for size_str in TRANSACTION_SIZES:
                     if size_str not in row:
                         continue
@@ -237,7 +218,7 @@ def patch_table_with_corrections(table_data: dict, errors: List[ValidationError]
                         old_val = row[size_str]
                         row[size_str] = corrections[key]
                         logger.info(
-                            f"Patched {row['broker']} {asset_type} €{size_str}: "
+                            f"Patched {broker_name} {asset_type} EUR{size_str}: "
                             f"{old_val} -> {corrections[key]}"
                         )
 

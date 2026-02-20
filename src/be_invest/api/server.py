@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -36,7 +37,7 @@ from ..validation.fee_calculator import (
     calculate_fee, generate_explanation, BROKER_ALIASES, _ensure_rules_loaded,
 )
 from ..validation.persona_calculator import build_persona_comparison
-
+from ..evaluation import submit_evaluation_async
 
 # ========================================================================================
 # PYDANTIC MODELS
@@ -223,16 +224,14 @@ def _build_localized_broker_notes(lang: str) -> Dict[str, str]:
 app = FastAPI(title="be-invest PDF Text API", version="0.1.0")
 logger = logging.getLogger(__name__)
 
-# Add CORS middleware to allow cross-origin requests from anywhere
-# IMPORTANT: When using wildcard origins ["*"], credentials MUST be False
-# If you need credentials, specify exact origins instead of wildcard
+# CORS: use CORS_ORIGINS env var for production (comma-separated), defaults to * for dev
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=_cors_origins,
     allow_credentials=False,  # MUST be False with wildcard origins
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # Initialize caches
@@ -246,6 +245,33 @@ _ip_request_counts: Dict[str, List[float]] = {}
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_REQUESTS = 100  # max requests per window per IP
 _RATE_LIMIT_SCANS = 10  # max suspicious requests (404s, invalid paths) per window per IP
+
+_blocked_ips: Dict[str, float] = {}   # IP -> block-expiry timestamp
+_BLOCK_DURATION = 600                  # 10 min ban
+_ip_scan_counts: Dict[str, List[float]] = {}  # IP -> list of suspicious request timestamps
+
+_VALID_PATH_PREFIXES = frozenset({
+    "/health", "/cost-analysis", "/cost-comparison-tables",
+    "/financial-analysis", "/brokers", "/summary",
+    "/refresh-pdfs", "/refresh-and-analyze",
+    "/news", "/chat", "/docs", "/openapi.json", "/redoc",
+})
+
+
+def _get_client_ip(request: Request) -> str:
+    """Respect X-Forwarded-For for reverse proxy setups."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _is_private_ip(ip_str: str) -> bool:
+    """Check if IP is localhost or RFC-1918 private."""
+    try:
+        return ipaddress.ip_address(ip_str).is_loopback or ipaddress.ip_address(ip_str).is_private
+    except ValueError:
+        return False
 
 
 # ========================================================================================
@@ -278,13 +304,20 @@ async def rate_limit_and_log(request: Request, call_next):
     start_time = time.time()
     method = request.method
     path = request.url.path
-    query_string = request.url.query
-    client_ip = request.client.host if request.client else "unknown"
+    query_string = request.url.query or ""
+    client_ip = _get_client_ip(request)
 
     # Build URL string
     url_str = path
     if query_string:
         url_str += f"?{query_string}"
+
+    # ====== BLOCKED IP CHECK ======
+    if client_ip in _blocked_ips:
+        if time.time() < _blocked_ips[client_ip]:
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+        else:
+            del _blocked_ips[client_ip]
 
     # ====== RATE LIMITING ======
     current_time = time.time()
@@ -300,14 +333,24 @@ async def rate_limit_and_log(request: Request, call_next):
     ]
 
     # Check if IP is scanning (making lots of 404s or probing invalid paths)
+    path_lower = path.lower()
+    query_lower = query_string.lower()
     is_suspicious_path = (
-        path.startswith("/api/") or  # Probing for /api endpoints
-        "cmd=" in query_string or  # Command injection attempt
-        ".env" in path or  # Trying to access config files
-        "config" in path or  # Trying to access config
-        "admin" in path or  # Trying to access admin endpoints
-        "shell" in path or  # Trying to access shell
-        "exec" in path  # Trying to execute code
+        path.startswith("/api/") or          # Probing for /api endpoints
+        "cmd=" in query_string or            # Command injection attempt
+        ".env" in path or                    # Trying to access config files
+        "config" in path_lower or            # Trying to access config
+        "admin" in path_lower or             # Trying to access admin endpoints
+        "shell" in path_lower or             # Trying to access shell
+        "exec" in path_lower or              # Trying to execute code
+        "passwd" in path_lower or            # Password file probing
+        "wp-" in path_lower or               # WordPress probing
+        "phpmy" in path_lower or             # phpMyAdmin probing
+        ".git" in path_lower or              # Git repo probing
+        "base64" in query_lower or           # Encoded payload attempts
+        "../" in path or                     # Path traversal
+        "%2e%2e" in path_lower or            # URL-encoded path traversal
+        not any(path.startswith(p) for p in _VALID_PATH_PREFIXES)  # Unknown path
     )
 
     # Count requests
@@ -315,15 +358,28 @@ async def rate_limit_and_log(request: Request, call_next):
 
     # Check if rate limit exceeded
     if request_count >= _RATE_LIMIT_REQUESTS:
-        logger.warning(f"🚨 Rate limit exceeded for IP {client_ip}: {request_count} requests in {_RATE_LIMIT_WINDOW}s")
+        logger.warning(f"Rate limit exceeded for IP {client_ip}: {request_count} requests in {_RATE_LIMIT_WINDOW}s")
         return JSONResponse(
             status_code=429,
             content={"detail": "Too many requests. Please try again later."}
         )
 
-    # Log suspicious activity
+    # Track and auto-block IPs with repeated suspicious requests
     if is_suspicious_path:
-        logger.warning(f"⚠️  SUSPICIOUS REQUEST from {client_ip}: {method} {url_str}")
+        logger.warning(f"SUSPICIOUS REQUEST from {client_ip}: {method} {url_str}")
+
+        if client_ip not in _ip_scan_counts:
+            _ip_scan_counts[client_ip] = []
+        _ip_scan_counts[client_ip] = [
+            t for t in _ip_scan_counts[client_ip]
+            if current_time - t < _RATE_LIMIT_WINDOW
+        ]
+        _ip_scan_counts[client_ip].append(current_time)
+
+        if len(_ip_scan_counts[client_ip]) >= _RATE_LIMIT_SCANS:
+            _blocked_ips[client_ip] = current_time + _BLOCK_DURATION
+            logger.warning(f"BLOCKED IP {client_ip} for {_BLOCK_DURATION}s after {len(_ip_scan_counts[client_ip])} suspicious requests")
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
 
     _ip_request_counts[client_ip].append(current_time)
 
@@ -734,6 +790,79 @@ def _get_cost_comparison_data() -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load analysis file: {exc}")
 
+
+def _submit_groundedness_evaluation(
+    endpoint: str,
+    user_input: str,
+    retrieved_context: str,
+    generated_output: str,
+) -> None:
+    """
+    Submit an async evaluation task for groundedness scoring.
+    Logs results back to Langfuse trace AND creates evaluation record in Langfuse table.
+    Does not block the response.
+    """
+    try:
+        import threading
+        from ..evaluation import evaluate_groundedness_sync, create_langfuse_evaluation
+
+        # Get current trace ID from Langfuse context
+        try:
+            current_trace = langfuse_context.get_current_trace()
+            trace_id = current_trace.id if current_trace else None
+        except:
+            trace_id = None
+
+        def evaluate_and_score():
+            """Inner function to run in background thread."""
+            try:
+                result = evaluate_groundedness_sync(
+                    endpoint=endpoint,
+                    user_input=user_input,
+                    retrieved_context=retrieved_context,
+                    generated_output=generated_output,
+                )
+
+                if result:
+                    score = result.get("score", 0.0)
+                    reasoning = result.get("reasoning", "")
+                    hallucinations = result.get("hallucinations", [])
+                    grounded_facts = result.get("grounded_facts", [])
+
+                    # Log to Langfuse trace
+                    langfuse_context.score_current_trace(
+                        name="groundedness",
+                        value=score,
+                    )
+                    langfuse_context.update_current_observation(
+                        metadata={
+                            "groundedness_reasoning": reasoning[:500],  # Truncate long text
+                            "hallucinations_count": len(hallucinations),
+                            "grounded_facts_count": len(grounded_facts),
+                        }
+                    )
+
+                    # Also create evaluation record in Langfuse evaluation table
+                    eval_id = create_langfuse_evaluation(
+                        endpoint=endpoint,
+                        evaluation_result=result,
+                        trace_id=trace_id,
+                    )
+
+                    logger.info(f"✅ Groundedness evaluation complete: score={score}, eval_id={eval_id}")
+                else:
+                    logger.warning(f"⚠️ Groundedness evaluation failed (no result)")
+            except Exception as e:
+                logger.warning(f"⚠️ Groundedness evaluation error: {e}")
+
+        # Run in background thread to not block response
+        thread = threading.Thread(target=evaluate_and_score, daemon=True)
+        thread.start()
+
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to submit groundedness evaluation: {e}")
+
+
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
@@ -759,11 +888,10 @@ async def options_handler():
     return JSONResponse(
         content={"message": "OK"},
         headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Origin": ",".join(_cors_origins),
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
             "Access-Control-Max-Age": "3600",
-            # NOTE: Do NOT include Access-Control-Allow-Credentials when using wildcard origin
         }
     )
 
@@ -779,6 +907,7 @@ def get_cost_analysis() -> Dict[str, Any]:
 @time_api_call
 @observe(name="cost-comparison-tables")
 def get_cost_comparison_tables(
+        request: Request,
         model: str = Query("claude-sonnet-4-20250514", description="LLM to use for notes generation"),
         force: bool = Query(False, description="Force fresh generation, ignore cache"),
         lang: str = Query("en", description="Response language: en, fr-be, nl-be")
@@ -791,6 +920,10 @@ def get_cost_comparison_tables(
     Set force=True to re-extract fee rules from broker_cost_analyses.json
     via LLM before building tables.
     """
+    if force and not _is_private_ip(_get_client_ip(request)):
+        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
+        force = False
+
     # Check cache first (unless force=True)
     cache_key = FileCache.make_key("cost_comparison", model, lang)
     if not force:
@@ -944,6 +1077,17 @@ def get_cost_comparison_tables(
     llm_cache.set(cache_key, result)
     logger.info(f"Cached cost comparison tables (lang={lang})")
 
+    # Submit async groundedness evaluation (doesn't block response)
+    try:
+        _submit_groundedness_evaluation(
+            endpoint="cost-comparison-tables",
+            user_input=f"Generate cost comparison tables for {len(broker_names)} brokers (lang={lang})",
+            retrieved_context=json.dumps(cost_data, indent=2)[:2000],  # Truncate for context size
+            generated_output=json.dumps(result["euronext_brussels"], indent=2)[:2000],
+        )
+    except Exception as e:
+        logger.warning(f"Failed to submit evaluation: {e}")
+
     return result
 
 
@@ -1010,6 +1154,7 @@ def _localize_persona_definitions(model: str, persona_defs: Dict[str, Any], lang
 @time_api_call
 @observe(name="financial-analysis")
 def generate_financial_analysis(
+        request: Request,
         model: str = Query("claude-sonnet-4-20250514", description="LLM to use: claude-sonnet-4-20250514 (default), gpt-4o"),
         force: bool = Query(False, description="Force fresh generation, ignore cache"),
         lang: str = Query("en", description="Response language: en, fr-be, nl-be")
@@ -1027,6 +1172,10 @@ def generate_financial_analysis(
 
     Perfect for React/Vue/Angular apps to render with custom styling.
     """
+    if force and not _is_private_ip(_get_client_ip(request)):
+        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
+        force = False
+
     # Check cache first (unless force=True)
     cache_key = FileCache.make_key("financial_analysis", model, lang)
     if not force:
@@ -1294,6 +1443,17 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
         langfuse_context.score_current_trace(name="broker_coverage", value=min(total_broker_entries / 50, 1.0))  # Normalized to 50 entries
         langfuse_context.score_current_trace(name="fallback_required", value=0.0 if not fallback_used else 1.0)
 
+        # Submit async groundedness evaluation (doesn't block response)
+        try:
+            _submit_groundedness_evaluation(
+                endpoint="financial-analysis",
+                user_input=f"Generate financial analysis for {len(found_exchanges)} exchanges with {total_broker_entries} broker entries (lang={lang})",
+                retrieved_context=json.dumps(cost_data, indent=2)[:2000],  # Truncate for context size
+                generated_output=json.dumps(result, indent=2)[:3000],
+            )
+        except Exception as e:
+            logger.warning(f"Failed to submit evaluation: {e}")
+
         return result
 
     except json.JSONDecodeError as e:
@@ -1322,12 +1482,17 @@ def list_brokers() -> List[Dict[str, Any]]:
 @app.post("/refresh-pdfs")
 @time_api_call
 def refresh_pdfs(
+        request: Request,
         brokers_to_refresh: Optional[List[str]] = Query(None,
                                                         description="Specific brokers to refresh (if None, refreshes all)"),
         force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
         save_dir: Optional[str] = Query(None,
                                         description="Directory to save extracted text (default: data/output/pdf_text)"),
 ) -> Dict[str, Any]:
+    if force and not _is_private_ip(_get_client_ip(request)):
+        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
+        force = False
+
     brokers_yaml = _default_brokers_yaml()
     if not brokers_yaml.exists():
         raise HTTPException(status_code=404, detail=f"Brokers file not found: {brokers_yaml}")
@@ -1488,6 +1653,7 @@ def get_summary() -> str:
 @time_api_call
 @observe(name="refresh-and-analyze")
 def refresh_and_analyze(
+        request: Request,
         brokers_to_process: Optional[List[str]] = Query(None,
                                                         description="Specific brokers to analyze (if None, analyzes all)"),
         force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
@@ -1500,6 +1666,10 @@ def refresh_and_analyze(
     Supports both OpenAI (gpt-*) and Anthropic (claude-*) models.
     """
     import time
+
+    if force and not _is_private_ip(_get_client_ip(request)):
+        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
+        force = False
 
     langfuse_context.update_current_observation(metadata={"model": model, "force": force})
 
@@ -1706,6 +1876,17 @@ Return ONLY a valid JSON object with structured fee data.
     if fee_rules_diff:
         response_data["fee_rules_changes"] = fee_rules_diff
 
+    # Submit async groundedness evaluation (doesn't block response)
+    try:
+        _submit_groundedness_evaluation(
+            endpoint="refresh-and-analyze",
+            user_input=f"Refresh and analyze fee rules for {len(brokers_succeeded)} brokers",
+            retrieved_context=json.dumps({"refresh_results": refresh_results}, indent=2)[:2000],
+            generated_output=json.dumps({"analyses": all_analyses}, indent=2)[:2000],
+        )
+    except Exception as e:
+        logger.warning(f"Failed to submit evaluation: {e}")
+
     return response_data
 
 
@@ -1878,6 +2059,7 @@ IMPORTANT:
 @time_api_call
 @observe(name="news-scrape")
 def scrape_news_endpoint(
+    request: Request,
     brokers_to_scrape: Optional[List[str]] = Query(None, description="Specific brokers to scrape (if None, scrapes all with news_sources)"),
     force: bool = Query(False, description="Force fresh scrape, ignore cache"),
 ) -> Dict[str, Any]:
@@ -1887,6 +2069,11 @@ def scrape_news_endpoint(
     Set force=True to bypass cache and perform fresh scrape.
     """
     import time
+
+    if force and not _is_private_ip(_get_client_ip(request)):
+        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
+        force = False
+
     start_time = time.time()
 
     try:
@@ -2488,6 +2675,17 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
     langfuse_context.score_current_trace(name="answer_specificity", value=1.0 if has_specific_amounts else 0.5)
     langfuse_context.score_current_trace(name="pre_computed_usage", value=1.0 if has_pre_computed else 0.0)
     langfuse_context.score_current_trace(name="fallback_required", value=1.0 if fallback_required else 0.0)
+
+    # Submit async groundedness evaluation (doesn't block response)
+    try:
+        _submit_groundedness_evaluation(
+            endpoint="chat",
+            user_input=request.question,
+            retrieved_context=context[:2000],  # Context is built from fee rules and tables
+            generated_output=answer,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to submit evaluation: {e}")
 
     return {
         "answer": answer,
