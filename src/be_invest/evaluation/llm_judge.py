@@ -1,19 +1,23 @@
-"""LLM-as-Judge evaluator for Langfuse traces using Claude."""
+"""LLM-as-Judge evaluator for Langfuse traces using Gemini."""
 
-import asyncio
 import json
 import logging
 import os
+import time
 from typing import Optional, Dict, Any
-from anthropic import Anthropic, AsyncAnthropic
+
+from google import genai
+from google.genai import types
 from langfuse import Langfuse
-from langfuse.decorators import langfuse_context
 
 logger = logging.getLogger(__name__)
 
-# Initialize Anthropic clients
-sync_client = Anthropic()
-async_client = AsyncAnthropic()
+# Initialize Gemini client
+_gemini_api_key = os.getenv("GOOGLE_API_KEY")
+_gemini_client = genai.Client(api_key=_gemini_api_key) if _gemini_api_key else None
+
+if not _gemini_api_key:
+    logger.warning("GOOGLE_API_KEY not set — LLM judge will not work")
 
 # Initialize Langfuse client for evaluation records (only if credentials are available)
 _langfuse_client = None
@@ -27,7 +31,7 @@ try:
 except Exception as e:
     logger.warning(f"Could not initialize Langfuse client for evaluations: {e}")
 
-JUDGE_MODEL = "claude-opus-4-6"
+JUDGE_MODEL = "gemini-2.5-pro"
 
 
 def get_judge_prompt_for_endpoint(
@@ -38,9 +42,9 @@ def get_judge_prompt_for_endpoint(
 ) -> str:
     """Generate the judge prompt based on endpoint type."""
 
-    base_prompt = """You are an expert financial auditor and strict quality assurance judge. Your task is to evaluate whether a generated portfolio insight is completely grounded in the provided portfolio data.
+    base_prompt = """You are an expert financial auditor and strict quality assurance judge. Your task is to evaluate whether a generated response is completely grounded in the provided context data.
 
-You must act with zero tolerance for hallucinations. A hallucination occurs if the generated response mentions ANY numbers, stock tickers, asset allocations, account balances, broker names, fees, or market events that are not explicitly present in the provided context.
+You must act with zero tolerance for hallucinations. A hallucination occurs if the generated response mentions ANY numbers, broker names, fees, or financial details that cannot be found in or correctly calculated from the provided context.
 
 ### Inputs
 1. USER QUERY: The question or request that was made.
@@ -51,147 +55,86 @@ You must act with zero tolerance for hallucinations. A hallucination occurs if t
 Analyze the GENERATED OUTPUT against the RETRIEVED CONTEXT. Ignore whether the response is helpful or polite; focus entirely on factual accuracy based on the provided data.
 
 Score the response on a scale of 0 to 1 based on the following strict rubric:
-* Score 1 (Pass): Every factual statement, number, ticker, broker name, and fee in the GENERATED OUTPUT is explicitly supported by the RETRIEVED CONTEXT. The model made reasonable, mathematically sound deductions without adding outside information.
-* Score 0.5 (Partial): The GENERATED OUTPUT contains mostly grounded information but may have minor unverified details or reasonable inferences that go slightly beyond the context.
-* Score 0 (Fail): The GENERATED OUTPUT includes at least one significant detail (a number, a ticker, a broker name, a fee, or an external market event) that cannot be found in or directly calculated from the RETRIEVED CONTEXT.
+* Score 1 (Pass): Every factual statement, number, broker name, and fee in the GENERATED OUTPUT is explicitly supported by or correctly calculable from the RETRIEVED CONTEXT.
+* Score 0.5 (Partial): The GENERATED OUTPUT contains mostly grounded information but has minor unverified details.
+* Score 0 (Fail): The GENERATED OUTPUT includes at least one significant detail that cannot be found in or correctly calculated from the RETRIEVED CONTEXT.
+
+### CRITICAL: Verify by Recalculating
+Before flagging ANY number as a hallucination, you MUST recalculate it yourself from the fee rules in the context. Only flag a number if your own calculation produces a DIFFERENT result. If your calculation matches the output, it is NOT a hallucination."""
+
+    # Endpoint-specific instructions
+    endpoint_instructions = {
+        "cost-comparison-tables": """
+
+### Endpoint-Specific Instructions (Cost Comparison Tables)
+The comparison tables are DETERMINISTICALLY computed from the fee rules. The default exchange is Euronext Brussels.
+
+Fee pattern calculation rules you MUST follow when verifying:
+- **flat**: fee = flat amount + handling_fee (constant regardless of transaction size)
+- **tiered_flat**: find the tier where amount <= up_to, fee = that tier's fee + handling_fee
+- **tiered_flat_then_slice**: find the highest flat tier where amount <= up_to. If amount exceeds all flat tiers, use the HIGHEST flat tier fee as base, then for the remainder above that tier's up_to, calculate: ceiling(remainder / per_slice) * slice_fee. Apply max_fee cap if specified. Add handling_fee.
+- **percentage_with_min**: fee = max(amount * rate, min_fee) + handling_fee
+- **base_plus_slice**: fee = base_fee + (amount / per_slice * slice_fee) + handling_fee
+
+IMPORTANT: Do NOT flag a fee as hallucinated unless you have recalculated it step-by-step and arrived at a DIFFERENT number. Show your calculation work in the reasoning.""",
+
+        "financial-analysis": """
+
+### Endpoint-Specific Instructions (Financial Analysis)
+The financial analysis is generated by an LLM based on deterministic fee data. Verify that:
+- All broker names mentioned exist in the context
+- All fee amounts cited match the context data
+- Rankings and comparisons are consistent with the underlying numbers
+- No external market data or events are fabricated""",
+
+        "refresh-and-analyze": """
+
+### Endpoint-Specific Instructions (Refresh & Analyze)
+This evaluates extracted fee rules from scraped PDFs. Verify that:
+- Extracted fee patterns match the PDF content in the context
+- Tier boundaries and amounts are correct
+- No fee rules are fabricated or mixed between brokers""",
+
+        "chat": """
+
+### Endpoint-Specific Instructions (Chat)
+The chat response may include pre-computed deterministic fees. Verify that:
+- All fee amounts cited are present in or calculable from the context
+- Broker names and instruments mentioned exist in the context
+- No fabricated recommendations or external data are included
+- If comparison tables are in the context, cited values must match exactly""",
+    }
+
+    extra = endpoint_instructions.get(endpoint, "")
+
+    return f"""{base_prompt}{extra}
 
 ### Output Format
 You must output a valid JSON object. Do not include markdown formatting or extra text outside the JSON.
 
-First, write out your step-by-step reasoning. Identify every factual claim in the output and verify if it exists in the context. Finally, provide the score between 0 and 1.
+Write step-by-step reasoning where you recalculate each fee claim before judging. Then provide the score.
 
-{
-  "reasoning": "Step 1: The output claims X. Checking context... [verification]. Step 2: The output claims Y...",
-  "score": 0.8,
-  "hallucinations": ["claim that is not grounded", "another unverified claim"],
-  "grounded_facts": ["fact that is grounded", "another verified fact"]
-}"""
+{{
+  "reasoning": "Step 1: Checking Bolero stocks at 50000. Rule: tiered_flat_then_slice. Highest flat tier is 2500 (fee 7.5). Remainder: 50000-2500=47500. Slices: ceil(47500/10000)=5. Slice fee: 5*15=75. But max_fee=50, so capped at 50. Total: 50.0. Output says 50.0. CORRECT.",
+  "score": 1.0,
+  "hallucinations": [],
+  "grounded_facts": ["Bolero stocks 50000 = 50.0"]
+}}"""
 
-    if endpoint == "cost-comparison-tables":
-        prompt = f"""{base_prompt}
 
----
-
-USER QUERY: {user_input}
-
-RETRIEVED CONTEXT (Fee Rules and Broker Data):
-{retrieved_context}
-
-GENERATED OUTPUT (Comparison Tables):
-{generated_output}"""
-
-    elif endpoint == "refresh-and-analyze":
-        prompt = f"""{base_prompt}
-
----
-
-USER QUERY: {user_input}
-
-RETRIEVED CONTEXT (Extracted PDF Content):
-{retrieved_context}
-
-GENERATED OUTPUT (Extracted Fee Rules and Analysis):
-{generated_output}"""
-
-    elif endpoint == "financial-analysis":
-        prompt = f"""{base_prompt}
-
----
-
-USER QUERY: {user_input}
-
-RETRIEVED CONTEXT (Broker Fee Data):
-{retrieved_context}
-
-GENERATED OUTPUT (Financial Analysis):
-{generated_output}"""
-
-    elif endpoint == "chat":
-        prompt = f"""{base_prompt}
-
----
-
-USER QUERY: {user_input}
-
-RETRIEVED CONTEXT (Fee Rules, Comparison Tables, Hidden Costs):
-{retrieved_context}
-
-GENERATED OUTPUT (Chat Response):
-{generated_output}"""
-
+def _parse_judge_response(response_text: str, endpoint: str) -> Optional[Dict[str, Any]]:
+    """Parse JSON from judge response, handling markdown wrappers and control characters."""
+    if "```json" in response_text:
+        json_str = response_text.split("```json")[1].split("```")[0].strip()
+    elif "```" in response_text:
+        json_str = response_text.split("```")[1].split("```")[0].strip()
     else:
-        # Fallback for unknown endpoints
-        prompt = f"""{base_prompt}
+        json_str = response_text.strip()
 
----
-
-USER QUERY: {user_input}
-
-RETRIEVED CONTEXT:
-{retrieved_context}
-
-GENERATED OUTPUT:
-{generated_output}"""
-
-    return prompt
-
-
-async def evaluate_groundedness_async(
-    endpoint: str,
-    user_input: str,
-    retrieved_context: str,
-    generated_output: str,
-) -> Optional[Dict[str, Any]]:
-    """
-    Asynchronously evaluate the groundedness of a generated response using Claude.
-
-    Args:
-        endpoint: The endpoint being evaluated (cost-comparison-tables, refresh-and-analyze, etc.)
-        user_input: The user's query or request
-        retrieved_context: The context data used to generate the output
-        generated_output: The generated response to evaluate
-
-    Returns:
-        Dict with 'score' and 'reasoning', or None if evaluation fails
-    """
-    try:
-        judge_prompt = get_judge_prompt_for_endpoint(
-            endpoint, user_input, retrieved_context, generated_output
-        )
-
-        message = await async_client.messages.create(
-            model=JUDGE_MODEL,
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": judge_prompt,
-                }
-            ],
-        )
-
-        response_text = message.content[0].text
-
-        # Parse JSON response
-        # Try to extract JSON if it's wrapped in markdown code blocks
-        if "```json" in response_text:
-            json_str = response_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in response_text:
-            json_str = response_text.split("```")[1].split("```")[0].strip()
-        else:
-            json_str = response_text.strip()
-
-        result = json.loads(json_str)
-        logger.info(f"✅ Judge evaluation complete for {endpoint}: score={result.get('score', 'N/A')}")
-        return result
-
-    except json.JSONDecodeError as e:
-        logger.warning(f"⚠️ Judge returned invalid JSON for {endpoint}: {e}")
-        logger.debug(f"Response was: {response_text[:200]}")
-        return None
-    except Exception as e:
-        logger.warning(f"⚠️ Judge evaluation failed for {endpoint}: {e}")
-        return None
+    # strict=False allows control characters (newlines, tabs) inside JSON strings
+    result = json.loads(json_str, strict=False)
+    logger.info(f"✅ Judge evaluation complete for {endpoint}: score={result.get('score', 'N/A')}")
+    return result
 
 
 def evaluate_groundedness_sync(
@@ -201,75 +144,52 @@ def evaluate_groundedness_sync(
     generated_output: str,
 ) -> Optional[Dict[str, Any]]:
     """
-    Synchronously evaluate the groundedness of a generated response using Claude.
-    Use async version when possible for non-blocking evaluation.
+    Synchronously evaluate the groundedness of a generated response using Gemini.
+    Retries up to 3 times on rate limit (429) errors with exponential backoff.
     """
-    try:
-        judge_prompt = get_judge_prompt_for_endpoint(
-            endpoint, user_input, retrieved_context, generated_output
-        )
-
-        message = sync_client.messages.create(
-            model=JUDGE_MODEL,
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": judge_prompt,
-                }
-            ],
-        )
-
-        response_text = message.content[0].text
-
-        # Parse JSON response
-        if "```json" in response_text:
-            json_str = response_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in response_text:
-            json_str = response_text.split("```")[1].split("```")[0].strip()
-        else:
-            json_str = response_text.strip()
-
-        result = json.loads(json_str)
-        logger.info(f"✅ Judge evaluation complete for {endpoint}: score={result.get('score', 'N/A')}")
-        return result
-
-    except json.JSONDecodeError as e:
-        logger.warning(f"⚠️ Judge returned invalid JSON for {endpoint}: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"⚠️ Judge evaluation failed for {endpoint}: {e}")
+    if not _gemini_client:
+        logger.warning("⚠️ Gemini client not initialized, skipping judge evaluation")
         return None
 
+    judge_prompt = get_judge_prompt_for_endpoint(
+        endpoint, user_input, retrieved_context, generated_output
+    )
 
-def submit_evaluation_async(
-    endpoint: str,
-    user_input: str,
-    retrieved_context: str,
-    generated_output: str,
-) -> None:
-    """
-    Submit evaluation task asynchronously in a fire-and-forget manner.
-    Does not block the response.
-    """
-    try:
-        # Try to run in event loop if available
+    max_retries = 3
+    base_delay = 2.0
+
+    for attempt in range(max_retries):
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(
-                evaluate_groundedness_async(
-                    endpoint, user_input, retrieved_context, generated_output
-                )
+            response = _gemini_client.models.generate_content(
+                model=JUDGE_MODEL,
+                contents=judge_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    response_mime_type="application/json",
+                ),
             )
-        except RuntimeError:
-            # No event loop, run in new thread with new loop
-            asyncio.run(
-                evaluate_groundedness_async(
-                    endpoint, user_input, retrieved_context, generated_output
-                )
-            )
-    except Exception as e:
-        logger.warning(f"⚠️ Failed to submit async evaluation: {e}")
+
+            return _parse_judge_response(response.text, endpoint)
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"⚠️ Judge returned invalid JSON for {endpoint}: {e}")
+            return None
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "Resource exhausted" in error_str:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"⚠️ Gemini rate limit (attempt {attempt + 1}/{max_retries}). Retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.warning(f"⚠️ Gemini rate limit exhausted after {max_retries} attempts for {endpoint}")
+                    return None
+            else:
+                logger.warning(f"⚠️ Judge evaluation failed for {endpoint}: {e}")
+                return None
+
+    return None
 
 
 def create_langfuse_evaluation(
@@ -279,14 +199,6 @@ def create_langfuse_evaluation(
 ) -> Optional[str]:
     """
     Create an evaluation record in Langfuse's evaluation table.
-
-    Args:
-        endpoint: The endpoint being evaluated
-        evaluation_result: The evaluation result from the judge (contains score, reasoning, etc.)
-        trace_id: Optional trace ID to link this evaluation to a specific trace
-
-    Returns:
-        The evaluation record ID if successful, None otherwise
     """
     if not _langfuse_client:
         logger.debug("Langfuse client not available, skipping evaluation record creation")
@@ -295,21 +207,25 @@ def create_langfuse_evaluation(
     try:
         score = evaluation_result.get("score", 0.0)
         reasoning = evaluation_result.get("reasoning", "")
-        hallucinations = evaluation_result.get("hallucinations", [])
-        grounded_facts = evaluation_result.get("grounded_facts", [])
 
-        # Create evaluation record in Langfuse
+        if not trace_id:
+            logger.warning("⚠️ No trace_id provided — score will be created but not linked to a trace")
+
         eval_record = _langfuse_client.score(
             trace_id=trace_id,
             observation_id=None,
             name="groundedness",
             value=score,
-            comment=f"Endpoint: {endpoint}\n\nReasoning: {reasoning[:500]}...",  # Truncate long reasoning
-            data_type="numeric",
+            comment=f"Endpoint: {endpoint} | Judge: {JUDGE_MODEL}\n\nReasoning: {reasoning[:500]}...",
+            data_type="NUMERIC",
         )
 
-        logger.info(f"✅ Created Langfuse evaluation record: {eval_record}")
-        return str(eval_record)
+        # Flush to ensure the score is sent before the daemon thread exits
+        _langfuse_client.flush()
+
+        record_id = getattr(eval_record, 'id', str(eval_record))
+        logger.info(f"✅ Created Langfuse evaluation record: {record_id}")
+        return record_id
 
     except Exception as e:
         logger.warning(f"⚠️ Failed to create Langfuse evaluation record: {e}")
@@ -326,21 +242,12 @@ def submit_evaluation_to_langfuse(
     """
     Evaluate groundedness and submit results to Langfuse evaluation table.
     Runs asynchronously in a background thread.
-
-    Args:
-        endpoint: The endpoint being evaluated
-        user_input: The user's query or request
-        retrieved_context: The context data used to generate the output
-        generated_output: The generated response to evaluate
-        trace_id: Optional trace ID to link evaluation to specific trace
     """
     try:
         import threading
 
         def evaluate_and_create_record():
-            """Inner function to run in background thread."""
             try:
-                # Evaluate groundedness
                 result = evaluate_groundedness_sync(
                     endpoint=endpoint,
                     user_input=user_input,
@@ -349,7 +256,6 @@ def submit_evaluation_to_langfuse(
                 )
 
                 if result:
-                    # Create Langfuse evaluation record
                     eval_id = create_langfuse_evaluation(
                         endpoint=endpoint,
                         evaluation_result=result,
@@ -363,7 +269,6 @@ def submit_evaluation_to_langfuse(
             except Exception as e:
                 logger.warning(f"⚠️ Evaluation submission error: {e}")
 
-        # Run in background thread to not block response
         thread = threading.Thread(target=evaluate_and_create_record, daemon=True)
         thread.start()
 

@@ -50,22 +50,19 @@
     },
     "be_invest": {
       "handlers": ["default", "file"],
-      "level": "INFO"
+      "level": "INFO",
+      "propagate": false
     },
     "be_invest.api.server": {
-      "handlers": ["default", "file"],
       "level": "INFO"
     },
     "be_invest.fetchers": {
-      "handlers": ["default", "file"],
       "level": "DEBUG"
     },
     "be_invest.sources.scrape": {
-      "handlers": ["default", "file"],
       "level": "DEBUG"
     },
     "be_invest.sources.llm_extract": {
-      "handlers": ["default", "file"],
       "level": "DEBUG"
     }
   }

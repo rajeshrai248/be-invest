@@ -37,7 +37,6 @@ from ..validation.fee_calculator import (
     calculate_fee, generate_explanation, BROKER_ALIASES, _ensure_rules_loaded,
 )
 from ..validation.persona_calculator import build_persona_comparison
-from ..evaluation import submit_evaluation_async
 
 # ========================================================================================
 # PYDANTIC MODELS
@@ -473,43 +472,43 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
     if model.startswith("gemini"):
         # Use Google Generative AI SDK
         try:
-            import google.generativeai as genai
+            from google import genai as google_genai
+            from google.genai import types as genai_types
         except ImportError:
             raise HTTPException(
                 status_code=500,
-                detail="Google Generative AI SDK not installed. Run: pip install google-generativeai"
+                detail="Google GenAI SDK not installed. Run: pip install google-genai"
             )
 
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise HTTPException(status_code=500, detail="GOOGLE_API_KEY not set.")
 
-        genai.configure(api_key=api_key)
+        client = google_genai.Client(api_key=api_key)
 
         logger.info(f"Calling Gemini model: {model}")
 
         try:
-            generation_config = {
-                "temperature": effective_temperature,
-            }
+            config_kwargs = {"temperature": effective_temperature}
             if response_format == "json":
-                generation_config["response_mime_type"] = "application/json"
+                config_kwargs["response_mime_type"] = "application/json"
+            if system_prompt:
+                config_kwargs["system_instruction"] = system_prompt
 
-            model_instance = genai.GenerativeModel(
-                model_name=model,
-                system_instruction=system_prompt,
-                generation_config=generation_config,
-            )
-
-            # Build messages for Gemini (uses "model" instead of "assistant")
+            # Build contents for Gemini
             if messages is not None:
-                gemini_messages = []
+                contents = []
                 for msg in messages:
                     role = "model" if msg["role"] == "assistant" else msg["role"]
-                    gemini_messages.append({"role": role, "parts": [msg["content"]]})
-                response = model_instance.generate_content(gemini_messages)
+                    contents.append(genai_types.Content(role=role, parts=[genai_types.Part(text=msg["content"])]))
             else:
-                response = model_instance.generate_content(user_prompt)
+                contents = user_prompt
+
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=genai_types.GenerateContentConfig(**config_kwargs),
+            )
 
             # Report token usage to Langfuse
             usage_meta = getattr(response, "usage_metadata", None)
@@ -678,16 +677,19 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
 
                 return response_text
 
-            except anthropic.RateLimitError as e:
+            except anthropic.APIStatusError as e:
+                if e.status_code not in (429, 529):
+                    raise
+                error_type = "Rate limit" if e.status_code == 429 else "Overloaded (529)"
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)  # Exponential backoff
-                    logger.warning(f"⚠️ Rate limit hit (attempt {attempt + 1}/{max_retries}). Retrying in {delay}s...")
+                    logger.warning(f"⚠️ {error_type} hit (attempt {attempt + 1}/{max_retries}). Retrying in {delay}s...")
                     time.sleep(delay)
                     continue
                 else:
-                    logger.error(f"❌ Rate limit exceeded after {max_retries} attempts")
-                    # Fallback to GPT-4o if rate limited
-                    logger.info("🔄 Falling back to GPT-4o due to rate limits...")
+                    logger.error(f"❌ {error_type} after {max_retries} attempts")
+                    # Fallback to GPT-4o if rate limited/overloaded
+                    logger.info("🔄 Falling back to GPT-4o due to API issues...")
                     langfuse_context.score_current_trace(name="required_fallback", value=1)
                     return _call_llm("gpt-4o", system_prompt, user_prompt, response_format,
                                      temperature=temperature, messages=messages)
@@ -806,12 +808,15 @@ def _submit_groundedness_evaluation(
         import threading
         from ..evaluation import evaluate_groundedness_sync, create_langfuse_evaluation
 
-        # Get current trace ID from Langfuse context
+        # Get current trace ID from Langfuse context (must capture before thread starts)
+        trace_id = None
         try:
-            current_trace = langfuse_context.get_current_trace()
-            trace_id = current_trace.id if current_trace else None
-        except:
-            trace_id = None
+            trace_id = langfuse_context.get_current_trace_id()
+        except Exception:
+            pass
+
+        if not trace_id:
+            logger.warning(f"⚠️ No Langfuse trace_id captured for {endpoint} — judge score won't appear on trace")
 
         def evaluate_and_score():
             """Inner function to run in background thread."""
@@ -825,31 +830,29 @@ def _submit_groundedness_evaluation(
 
                 if result:
                     score = result.get("score", 0.0)
-                    reasoning = result.get("reasoning", "")
                     hallucinations = result.get("hallucinations", [])
                     grounded_facts = result.get("grounded_facts", [])
+                    reasoning = result.get("reasoning", "")
 
-                    # Log to Langfuse trace
-                    langfuse_context.score_current_trace(
-                        name="groundedness",
-                        value=score,
-                    )
-                    langfuse_context.update_current_observation(
-                        metadata={
-                            "groundedness_reasoning": reasoning[:500],  # Truncate long text
-                            "hallucinations_count": len(hallucinations),
-                            "grounded_facts_count": len(grounded_facts),
-                        }
-                    )
-
-                    # Also create evaluation record in Langfuse evaluation table
+                    # Create evaluation record in Langfuse via direct client
+                    # (langfuse_context is not available in background threads)
                     eval_id = create_langfuse_evaluation(
                         endpoint=endpoint,
                         evaluation_result=result,
                         trace_id=trace_id,
                     )
 
-                    logger.info(f"✅ Groundedness evaluation complete: score={score}, eval_id={eval_id}")
+                    logger.info(f"✅ Groundedness evaluation complete: score={score}, trace_id={trace_id}")
+
+                    # Log detailed feedback for low scores
+                    if score < 1.0:
+                        logger.warning(
+                            f"⚠️ [{endpoint}] Groundedness score={score} | "
+                            f"Hallucinations ({len(hallucinations)}): {hallucinations} | "
+                            f"Grounded facts ({len(grounded_facts)}): {grounded_facts}"
+                        )
+                        if reasoning:
+                            logger.info(f"📝 [{endpoint}] Judge reasoning: {reasoning[:1000]}")
                 else:
                     logger.warning(f"⚠️ Groundedness evaluation failed (no result)")
             except Exception as e:
@@ -1082,8 +1085,8 @@ def get_cost_comparison_tables(
         _submit_groundedness_evaluation(
             endpoint="cost-comparison-tables",
             user_input=f"Generate cost comparison tables for {len(broker_names)} brokers (lang={lang})",
-            retrieved_context=json.dumps(cost_data, indent=2)[:2000],  # Truncate for context size
-            generated_output=json.dumps(result["euronext_brussels"], indent=2)[:2000],
+            retrieved_context=json.dumps(cost_data, indent=2)[:50000],
+            generated_output=json.dumps(result["euronext_brussels"], indent=2)[:50000],
         )
     except Exception as e:
         logger.warning(f"Failed to submit evaluation: {e}")
@@ -1448,8 +1451,8 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
             _submit_groundedness_evaluation(
                 endpoint="financial-analysis",
                 user_input=f"Generate financial analysis for {len(found_exchanges)} exchanges with {total_broker_entries} broker entries (lang={lang})",
-                retrieved_context=json.dumps(cost_data, indent=2)[:2000],  # Truncate for context size
-                generated_output=json.dumps(result, indent=2)[:3000],
+                retrieved_context=json.dumps(cost_data, indent=2)[:50000],
+                generated_output=json.dumps(result, indent=2)[:50000],
             )
         except Exception as e:
             logger.warning(f"Failed to submit evaluation: {e}")
@@ -1881,8 +1884,8 @@ Return ONLY a valid JSON object with structured fee data.
         _submit_groundedness_evaluation(
             endpoint="refresh-and-analyze",
             user_input=f"Refresh and analyze fee rules for {len(brokers_succeeded)} brokers",
-            retrieved_context=json.dumps({"refresh_results": refresh_results}, indent=2)[:2000],
-            generated_output=json.dumps({"analyses": all_analyses}, indent=2)[:2000],
+            retrieved_context=json.dumps({"refresh_results": refresh_results}, indent=2)[:50000],
+            generated_output=json.dumps({"analyses": all_analyses}, indent=2)[:50000],
         )
     except Exception as e:
         logger.warning(f"Failed to submit evaluation: {e}")
@@ -2681,7 +2684,7 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
         _submit_groundedness_evaluation(
             endpoint="chat",
             user_input=request.question,
-            retrieved_context=context[:2000],  # Context is built from fee rules and tables
+            retrieved_context=context[:50000],
             generated_output=answer,
         )
     except Exception as e:
