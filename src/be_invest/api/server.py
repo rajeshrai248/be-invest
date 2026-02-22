@@ -10,8 +10,9 @@ import logging
 import os
 import re
 import shutil
+import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Callable
@@ -413,6 +414,88 @@ async def rate_limit_and_log(request: Request, call_next):
 
 
 news_cache = FileCache(Path("data/cache/news"), default_ttl=24 * 3600)  # 24 hours
+
+# ========================================================================================
+# SCHEDULED NEWS SCRAPE
+# ========================================================================================
+
+_NEWS_SCRAPE_INTERVAL_HOURS = float(os.environ.get("NEWS_SCRAPE_INTERVAL_HOURS", "24"))
+_news_scrape_timer: Optional[threading.Timer] = None
+_last_news_scrape_at: Optional[datetime] = None
+_news_scrape_in_progress = False
+
+
+def _run_scheduled_news_scrape() -> None:
+    """Background job: scrape all broker news and cache the result, then reschedule."""
+    global _last_news_scrape_at, _news_scrape_in_progress, _news_scrape_timer
+
+    _news_scrape_in_progress = True
+    logger.info("=" * 60)
+    logger.info("📰 Scheduled news scrape starting")
+    logger.info("=" * 60)
+
+    try:
+        brokers_yaml = _default_brokers_yaml()
+        if not brokers_yaml.exists():
+            logger.warning(f"Brokers YAML not found at {brokers_yaml}, skipping scheduled scrape")
+            return
+
+        all_brokers = load_brokers_from_yaml(brokers_yaml)
+        brokers_with_news = [b for b in all_brokers if b.news_sources]
+
+        if not brokers_with_news:
+            logger.info("No brokers with news_sources configured, nothing to scrape")
+            return
+
+        scraped_news = scrape_broker_news(brokers_with_news, force=False)
+
+        # Build the same response shape as the endpoint so cache is compatible
+        broker_summary = {}
+        for broker in brokers_with_news:
+            count = len([n for n in scraped_news if n.broker == broker.name])
+            if count > 0:
+                broker_summary[broker.name] = count
+
+        news_items_response = [
+            {
+                "broker": n.broker,
+                "title": n.title,
+                "summary": n.summary[:150] + "..." if len(n.summary) > 150 else n.summary,
+                "url": n.url,
+                "date": n.date,
+                "source": n.source,
+            }
+            for n in scraped_news
+        ]
+
+        response = {
+            "status": "success",
+            "message": f"Successfully scraped {len(scraped_news)} news items from {len(broker_summary)} brokers",
+            "news_by_broker": broker_summary,
+            "news_items": news_items_response,
+            "total_scraped": len(scraped_news),
+            "brokers_with_news": len(broker_summary),
+            "brokers_processed": len(brokers_with_news),
+            "from_cache": False,
+        }
+
+        cache_key = FileCache.make_key("news_scrape", "all")
+        news_cache.set(cache_key, response)
+        _last_news_scrape_at = datetime.now(timezone.utc)
+
+        logger.info(f"✅ Scheduled news scrape completed: {len(scraped_news)} items from {len(broker_summary)} brokers")
+
+    except Exception:
+        logger.error("❌ Scheduled news scrape failed", exc_info=True)
+    finally:
+        _news_scrape_in_progress = False
+        # Reschedule
+        interval_secs = _NEWS_SCRAPE_INTERVAL_HOURS * 3600
+        _news_scrape_timer = threading.Timer(interval_secs, _run_scheduled_news_scrape)
+        _news_scrape_timer.daemon = True
+        _news_scrape_timer.start()
+        next_run = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        logger.info(f"⏰ Next scheduled news scrape in {_NEWS_SCRAPE_INTERVAL_HOURS}h (approx {next_run})")
 
 
 def _default_output_dir() -> Path:
@@ -2069,7 +2152,8 @@ def scrape_news_endpoint(
     """
     Automatically scrape news from broker websites, RSS feeds, and APIs.
 
-    Set force=True to bypass cache and perform fresh scrape.
+    Default behaviour returns cached data instantly (populated by the background
+    scheduler). Set force=True to bypass cache and perform a live scrape.
     """
     import time
 
@@ -2088,6 +2172,7 @@ def scrape_news_endpoint(
                 logger.info(f"📦 Returning cached news scrape results")
                 cached["duration_seconds"] = round(time.time() - start_time, 2)
                 cached["from_cache"] = True
+                cached["last_scraped_at"] = _last_news_scrape_at.isoformat() if _last_news_scrape_at else None
 
                 # Add tracing for cache hit
                 langfuse_context.update_current_observation(
@@ -2101,6 +2186,25 @@ def scrape_news_endpoint(
                 langfuse_context.score_current_trace(name="cache_efficiency", value=1.0)
 
                 return cached
+
+            # No cache and not forcing — return a fast "pending" response
+            if _news_scrape_in_progress:
+                return {
+                    "status": "scrape_in_progress",
+                    "message": "A background news scrape is currently running. Try again shortly.",
+                    "last_scraped_at": _last_news_scrape_at.isoformat() if _last_news_scrape_at else None,
+                    "duration_seconds": round(time.time() - start_time, 2),
+                    "from_cache": False,
+                }
+
+            # Cache empty and no scrape running (server just started, first scrape pending)
+            return {
+                "status": "pending",
+                "message": "News data is not yet available. The first background scrape will complete shortly.",
+                "last_scraped_at": None,
+                "duration_seconds": round(time.time() - start_time, 2),
+                "from_cache": False,
+            }
 
         # Load brokers configuration
         brokers_yaml = _default_brokers_yaml()
@@ -2182,6 +2286,7 @@ def scrape_news_endpoint(
         news_items_per_broker = len(scraped_news) / max(len(broker_summary), 1) if broker_summary else 0
         error_count = len(error_summary)
 
+        scrape_timestamp = datetime.now(timezone.utc)
         response = {
             "status": "success",
             "message": f"Successfully scraped {len(scraped_news)} news items from {len(broker_summary)} brokers",
@@ -2191,7 +2296,8 @@ def scrape_news_endpoint(
             "brokers_with_news": len(broker_summary),
             "brokers_processed": len(brokers_to_process),
             "duration_seconds": duration,
-            "from_cache": False
+            "from_cache": False,
+            "last_scraped_at": scrape_timestamp.isoformat(),
         }
 
         if error_summary:
@@ -2698,10 +2804,23 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
 
 
 # ========================================================================================
-# LANGFUSE SHUTDOWN
+# STARTUP / SHUTDOWN
 # ========================================================================================
+
+@app.on_event("startup")
+def _start_news_scrape_scheduler():
+    """Kick off the first scheduled news scrape after a short delay."""
+    delay_secs = 30
+    logger.info(f"📰 News scrape scheduler: first run in {delay_secs}s (interval={_NEWS_SCRAPE_INTERVAL_HOURS}h)")
+    timer = threading.Timer(delay_secs, _run_scheduled_news_scrape)
+    timer.daemon = True
+    timer.start()
+
 
 @app.on_event("shutdown")
 def _flush_langfuse():
     """Ensure all Langfuse traces are sent before the process exits."""
+    global _news_scrape_timer
+    if _news_scrape_timer is not None:
+        _news_scrape_timer.cancel()
     langfuse_context.flush()
