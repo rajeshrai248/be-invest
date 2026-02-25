@@ -12,7 +12,7 @@ import re
 import shutil
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Callable
@@ -425,6 +425,50 @@ _last_news_scrape_at: Optional[datetime] = None
 _news_scrape_in_progress = False
 
 
+def _build_news_response(brokers_processed: int, newly_scraped: int, brokers_to_scrape: Optional[List[str]] = None) -> dict:
+    """Build a news response that includes recent news from news.jsonl (last 30 days)."""
+    from ..news import load_news
+
+    all_news = load_news()
+
+    # Filter to last 30 days based on created_at
+    cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+    recent_news = [n for n in all_news if (n.created_at or "") >= cutoff]
+
+    # If broker filter was specified, apply it
+    if brokers_to_scrape:
+        lower_names = [name.lower() for name in brokers_to_scrape]
+        recent_news = [n for n in recent_news if n.broker.lower() in lower_names]
+
+    broker_summary = {}
+    for n in recent_news:
+        broker_summary[n.broker] = broker_summary.get(n.broker, 0) + 1
+
+    news_items_response = [
+        {
+            "broker": n.broker,
+            "title": n.title,
+            "summary": n.summary[:150] + "..." if len(n.summary) > 150 else n.summary,
+            "url": n.url,
+            "date": n.date,
+            "source": n.source,
+        }
+        for n in recent_news
+    ]
+
+    return {
+        "status": "success",
+        "message": f"Scraped {newly_scraped} new items; {len(recent_news)} recent news items available",
+        "news_by_broker": broker_summary,
+        "news_items": news_items_response,
+        "total_scraped": len(recent_news),
+        "newly_scraped": newly_scraped,
+        "brokers_with_news": len(broker_summary),
+        "brokers_processed": brokers_processed,
+        "from_cache": False,
+    }
+
+
 def _run_scheduled_news_scrape() -> None:
     """Background job: scrape all broker news and cache the result, then reschedule."""
     global _last_news_scrape_at, _news_scrape_in_progress, _news_scrape_timer
@@ -449,41 +493,16 @@ def _run_scheduled_news_scrape() -> None:
 
         scraped_news = scrape_broker_news(brokers_with_news, force=False)
 
-        # Build the same response shape as the endpoint so cache is compatible
-        broker_summary = {}
-        for broker in brokers_with_news:
-            count = len([n for n in scraped_news if n.broker == broker.name])
-            if count > 0:
-                broker_summary[broker.name] = count
-
-        news_items_response = [
-            {
-                "broker": n.broker,
-                "title": n.title,
-                "summary": n.summary[:150] + "..." if len(n.summary) > 150 else n.summary,
-                "url": n.url,
-                "date": n.date,
-                "source": n.source,
-            }
-            for n in scraped_news
-        ]
-
-        response = {
-            "status": "success",
-            "message": f"Successfully scraped {len(scraped_news)} news items from {len(broker_summary)} brokers",
-            "news_by_broker": broker_summary,
-            "news_items": news_items_response,
-            "total_scraped": len(scraped_news),
-            "brokers_with_news": len(broker_summary),
-            "brokers_processed": len(brokers_with_news),
-            "from_cache": False,
-        }
+        response = _build_news_response(
+            brokers_processed=len(brokers_with_news),
+            newly_scraped=len(scraped_news),
+        )
 
         cache_key = FileCache.make_key("news_scrape", "all")
         news_cache.set(cache_key, response)
         _last_news_scrape_at = datetime.now(timezone.utc)
 
-        logger.info(f"✅ Scheduled news scrape completed: {len(scraped_news)} items from {len(broker_summary)} brokers")
+        logger.info(f"✅ Scheduled news scrape completed: {len(scraped_news)} new items, {response['total_scraped']} recent total")
 
     except Exception:
         logger.error("❌ Scheduled news scrape failed", exc_info=True)
@@ -2245,60 +2264,31 @@ def scrape_news_endpoint(
         # Perform the scraping
         scraped_news = scrape_broker_news(brokers_to_process, force=force)
 
-        # Group results by broker for summary
-        broker_summary = {}
-        error_summary = {}
-
-        for broker in brokers_to_process:
-            broker_news_count = len([n for n in scraped_news if n.broker == broker.name])
-            if broker_news_count > 0:
-                broker_summary[broker.name] = broker_news_count
-
-            # Check for any news sources that might have failed
-            if broker.news_sources:
-                sources_attempted = len([s for s in broker.news_sources if s.allowed_to_scrape or force])
-                if sources_attempted > 0 and broker_news_count == 0:
-                    error_summary[broker.name] = f"No news found from {sources_attempted} source(s)"
-
         duration = round(time.time() - start_time, 2)
 
         logger.info("=" * 80)
         logger.info("✅ AUTOMATED NEWS SCRAPING COMPLETED")
         logger.info("=" * 80)
-        logger.info(f"📊 Total news items: {len(scraped_news)}")
+        logger.info(f"📊 Newly scraped: {len(scraped_news)} items")
         logger.info(f"⏱️ Duration: {duration}s")
 
-        # Convert news items to response format
-        news_items_response = [
-            {
-                "broker": news.broker,
-                "title": news.title,
-                "summary": news.summary[:150] + "..." if len(news.summary) > 150 else news.summary,
-                "url": news.url,
-                "date": news.date,
-                "source": news.source
-            }
-            for news in scraped_news
-        ]
+        # Build response with all recent news from news.jsonl
+        response = _build_news_response(
+            brokers_processed=len(brokers_to_process),
+            newly_scraped=len(scraped_news),
+            brokers_to_scrape=brokers_to_scrape,
+        )
+        response["duration_seconds"] = duration
+        response["last_scraped_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Calculate metrics for tracing
-        scrape_success_rate = (len(broker_summary) / len(brokers_to_process) * 100) if brokers_to_process else 0
-        news_items_per_broker = len(scraped_news) / max(len(broker_summary), 1) if broker_summary else 0
-        error_count = len(error_summary)
-
-        scrape_timestamp = datetime.now(timezone.utc)
-        response = {
-            "status": "success",
-            "message": f"Successfully scraped {len(scraped_news)} news items from {len(broker_summary)} brokers",
-            "news_by_broker": broker_summary,
-            "news_items": news_items_response,  # Add actual news items with URLs
-            "total_scraped": len(scraped_news),
-            "brokers_with_news": len(broker_summary),
-            "brokers_processed": len(brokers_to_process),
-            "duration_seconds": duration,
-            "from_cache": False,
-            "last_scraped_at": scrape_timestamp.isoformat(),
-        }
+        # Check for brokers that returned no new items
+        error_summary = {}
+        for broker in brokers_to_process:
+            broker_new_count = len([n for n in scraped_news if n.broker == broker.name])
+            if broker.news_sources:
+                sources_attempted = len([s for s in broker.news_sources if s.allowed_to_scrape or force])
+                if sources_attempted > 0 and broker_new_count == 0:
+                    error_summary[broker.name] = f"No new news found from {sources_attempted} source(s)"
 
         if error_summary:
             response["warnings"] = error_summary
@@ -2307,20 +2297,22 @@ def scrape_news_endpoint(
         news_cache.set(cache_key, response)
 
         # Add tracing metadata
+        scrape_success_rate = (response["brokers_with_news"] / len(brokers_to_process) * 100) if brokers_to_process else 0
         langfuse_context.update_current_observation(
             output={
-                "total_news_items": len(scraped_news),
-                "brokers_with_news": len(broker_summary),
+                "total_news_items": response["total_scraped"],
+                "newly_scraped": len(scraped_news),
+                "brokers_with_news": response["brokers_with_news"],
                 "scrape_success_rate": round(scrape_success_rate, 1),
-                "avg_items_per_broker": round(news_items_per_broker, 2),
             },
             metadata={
                 "force": force,
                 "brokers_requested": brokers_to_scrape,
                 "brokers_processed": len(brokers_to_process),
-                "brokers_with_news": len(broker_summary),
-                "total_news_items": len(scraped_news),
-                "errors": error_count,
+                "brokers_with_news": response["brokers_with_news"],
+                "total_news_items": response["total_scraped"],
+                "newly_scraped": len(scraped_news),
+                "errors": len(error_summary),
                 "duration_seconds": duration,
                 "cache_hit": False,
                 "scrape_success_rate_pct": round(scrape_success_rate, 1),
@@ -2329,8 +2321,8 @@ def scrape_news_endpoint(
 
         # Add quality scores
         langfuse_context.score_current_trace(name="scrape_coverage", value=scrape_success_rate / 100)
-        langfuse_context.score_current_trace(name="news_volume", value=min(len(scraped_news) / 20, 1.0))  # Normalize to 20 items
-        langfuse_context.score_current_trace(name="error_rate", value=1.0 - (error_count / max(len(brokers_to_process), 1)))
+        langfuse_context.score_current_trace(name="news_volume", value=min(response["total_scraped"] / 20, 1.0))
+        langfuse_context.score_current_trace(name="error_rate", value=1.0 - (len(error_summary) / max(len(brokers_to_process), 1)))
 
         return response
 
