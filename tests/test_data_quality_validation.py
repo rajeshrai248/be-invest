@@ -132,7 +132,7 @@ EXPECTED_BROKER_FEES = {
             base_fee=1.0,  # FIXED: was missing 1€ handling fee
             variable_fee="€2 + 0.026%",
             trade_size_eur=5000,
-            expected_total_cost_eur=3.3,  # 1€ + 2€ + (5000 * 0.00026)
+            expected_total_cost_eur=4.3,  # 1€ + 2€ + (5000 * 0.00026) = 4.30
             notes="1€ handling fee + €2 base + 0.026% variable fee"
         ),
     ]
@@ -174,7 +174,8 @@ INVESTOR_SCENARIOS = {
 
 def validate_fee_structure_type(fee_record: FeeRecord) -> str:
     """Determine fee structure type from a FeeRecord."""
-    if fee_record.base_fee is not None and fee_record.variable_fee is not None:
+    has_base = fee_record.base_fee is not None and abs(fee_record.base_fee) > 1e-10
+    if has_base and fee_record.variable_fee is not None:
         return "composite"
     elif fee_record.variable_fee is not None and "%" in str(fee_record.variable_fee):
         return "percentage"
@@ -186,6 +187,7 @@ def validate_fee_structure_type(fee_record: FeeRecord) -> str:
 
 def calculate_total_cost(fee_record: FeeRecord, trade_value_eur: float) -> float:
     """Calculate total trading cost for a given trade value."""
+    import re
     total = 0.0
 
     if fee_record.base_fee is not None:
@@ -194,23 +196,21 @@ def calculate_total_cost(fee_record: FeeRecord, trade_value_eur: float) -> float
     if fee_record.variable_fee is not None:
         variable_str = str(fee_record.variable_fee)
 
-        # Handle percentage fees
-        if "%" in variable_str:
-            # Extract percentage value
-            import re
-            pct_match = re.search(r'(\d+\.?\d*)%', variable_str)
-            if pct_match:
-                percentage = float(pct_match.group(1)) / 100
-                total += trade_value_eur * percentage
-
-        # Handle composite fees like "€2 + 0.026%"
+        # Handle composite fees like "€2 + 0.026%" BEFORE simple percentage check
+        # to avoid double-counting (the composite pattern also contains a '%')
         composite_match = re.search(r'€(\d+\.?\d*)\s*\+\s*(\d+\.?\d*)%', variable_str)
         if composite_match:
             base_amount = float(composite_match.group(1))
             percentage = float(composite_match.group(2)) / 100
             total += base_amount + (trade_value_eur * percentage)
+        elif "%" in variable_str:
+            # Handle simple percentage fees
+            pct_match = re.search(r'(\d+\.?\d*)%', variable_str)
+            if pct_match:
+                percentage = float(pct_match.group(1)) / 100
+                total += trade_value_eur * percentage
 
-    return round(total, 2)
+    return total
 
 
 def calculate_investor_scenario_cost(
