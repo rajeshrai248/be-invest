@@ -1,0 +1,99 @@
+version: "3.8"
+
+services:
+  # ========================================
+  # LANGFUSE (Existing Setup)
+  # ========================================
+  langfuse-db:
+    image: postgres:15-alpine
+    container_name: langfuse-db
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    ports:
+      - "5433:5432"
+    volumes:
+      - langfuse_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - be-invest-network
+
+  langfuse-server:
+    image: langfuse/langfuse:2
+    container_name: langfuse
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: mysecret
+      SALT: mysalt
+      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      NEXTAUTH_URL: http://localhost:3000
+      TELEMETRY_ENABLED: false
+    restart: unless-stopped
+    networks:
+      - be-invest-network
+
+  # ========================================
+  # BE-INVEST APPLICATION
+  # ========================================
+  be-invest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: be-invest
+    ports:
+      - "8000:8000"
+    environment:
+      # Langfuse Configuration
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: http://langfuse-server:3000
+      
+      # LLM API Keys
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      
+      # Application Settings
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      NEWS_SCRAPE_INTERVAL_HOURS: ${NEWS_SCRAPE_INTERVAL_HOURS:-24}
+      
+      # Python
+      PYTHONUNBUFFERED: 1
+      PYTHONDONTWRITEBYTECODE: 1
+    volumes:
+      # Mount data directory for persistence
+      - ./data:/app/data
+      # Optional: Mount logs
+      - ./logs:/app/logs
+    depends_on:
+      langfuse-server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - be-invest-network
+
+volumes:
+  langfuse_pgdata:
+    driver: local
+
+networks:
+  be-invest-network:
+    driver: bridge

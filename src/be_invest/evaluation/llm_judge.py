@@ -72,7 +72,7 @@ The comparison tables are DETERMINISTICALLY computed from the fee rules. The def
 Fee pattern calculation rules you MUST follow when verifying:
 - **flat**: fee = flat amount + handling_fee (constant regardless of transaction size)
 - **tiered_flat**: find the tier where amount <= up_to, fee = that tier's fee + handling_fee
-- **tiered_flat_then_slice**: find the highest flat tier where amount <= up_to. If amount exceeds all flat tiers, use the HIGHEST flat tier fee as base, then for the remainder above that tier's up_to, calculate: ceiling(remainder / per_slice) * slice_fee. Apply max_fee cap if specified. Add handling_fee.
+- **tiered_flat_then_slice**: find the highest flat tier where amount <= up_to. If amount exceeds all flat tiers, use ONLY per-slice calculation (NO base fee): ceiling(remainder / per_slice) * slice_fee, where remainder = amount - highest_tier_threshold. Apply max_fee cap if specified. Add handling_fee.
 - **percentage_with_min**: fee = max(amount * rate, min_fee) + handling_fee
 - **base_plus_slice**: fee = base_fee + (amount / per_slice * slice_fee) + handling_fee
 

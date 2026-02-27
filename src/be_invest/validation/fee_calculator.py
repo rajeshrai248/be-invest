@@ -31,7 +31,7 @@ class FeeRule:
     # Pattern types:
     #   "flat"                    -- simple flat fee for all amounts
     #   "tiered_flat"             -- flat fees by tier (up_to thresholds)
-    #   "tiered_flat_then_slice"  -- flat tiers + per-slice for amounts above all tiers
+    #   "tiered_flat_then_slice"  -- flat tiers for low amounts, per-slice ONLY for amounts above all tiers
     #   "percentage_with_min"     -- percentage rate with minimum fee
     #   "base_plus_slice"         -- base fee up to threshold + per-slice for remainder
     tiers: List[dict] = field(default_factory=list)
@@ -85,6 +85,9 @@ def _compute_from_tiers(tiers: List[dict], amount: float, handling_fee: float = 
 
     Supports: flat, percentage_with_min, base_plus_slice, tiered_flat,
     tiered_flat_then_slice (with max_fee cap).
+    
+    IMPORTANT: tiered_flat_then_slice uses ONLY slice calculation when amount
+    exceeds all flat tiers. Flat tiers and slice tiers are separate categories.
     """
     # Check for simple flat fee
     if len(tiers) == 1 and "flat" in tiers[0]:
@@ -115,23 +118,18 @@ def _compute_from_tiers(tiers: List[dict], amount: float, handling_fee: float = 
         if amount <= tier["up_to"]:
             return tier["fee"] + handling_fee
 
-    # Amount exceeds all flat tiers -> use per_slice tier
+    # Amount exceeds all flat tiers -> use per_slice tier ONLY (no base)
     if slice_tiers:
         slice_tier = slice_tiers[0]
         # Find the highest flat tier threshold to use as the base boundary
         highest_flat_threshold = max(t["up_to"] for t in flat_tiers) if flat_tiers else 0
-        highest_flat_fee = 0.0
-        if flat_tiers:
-            # Get fee of the highest flat tier
-            highest_flat_fee = max(
-                (t for t in flat_tiers),
-                key=lambda t: t["up_to"]
-            )["fee"]
 
         # Compute slices for the remainder above the highest flat tier
+        # NOTE: We do NOT add the highest flat tier fee as a base.
+        # The slice tier is a separate pricing category.
         remainder = amount - highest_flat_threshold
         slices = math.ceil(remainder / slice_tier["per_slice"])
-        fee = highest_flat_fee + (slices * slice_tier["fee"])
+        fee = slices * slice_tier["fee"]
 
         # Apply max_fee cap if present (on the tier or rule level)
         tier_max = slice_tier.get("max_fee")
@@ -424,14 +422,13 @@ def generate_explanation(broker: str, instrument: str, amount: float) -> str:
         if highest_flat:
             remainder = amount - highest_flat["up_to"]
             slices = math.ceil(remainder / slice_tier["per_slice"])
-            base_part = f"EUR{highest_flat['fee']:.2f} base"
             slice_part = f"{slices} x EUR{slice_tier['fee']:.2f} (EUR{remainder:.0f} / EUR{slice_tier['per_slice']:,} slices)"
-            raw_fee = highest_flat["fee"] + slices * slice_tier["fee"]
+            raw_fee = slices * slice_tier["fee"]
 
             effective_max = slice_tier.get("max_fee") or rule.max_fee
             if effective_max and raw_fee > effective_max:
-                return f"{base_part} + {slice_part} = EUR{raw_fee:.2f}, capped at EUR{effective_max:.2f} -> EUR{expected:.2f}"
-            return f"{base_part} + {slice_part} = EUR{expected:.2f}"
+                return f"{slice_part} = EUR{raw_fee:.2f}, capped at EUR{effective_max:.2f} -> EUR{expected:.2f}"
+            return f"{slice_part} = EUR{expected:.2f}"
         else:
             slices = math.ceil(amount / slice_tier["per_slice"])
             return f"{slices} x EUR{slice_tier['fee']:.2f} per EUR{slice_tier['per_slice']:,} slice = EUR{expected:.2f}"

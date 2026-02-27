@@ -18,16 +18,72 @@ BE-Invest is an automated system that extracts, validates, and analyzes broker f
 - **🌐 REST API**: FastAPI-based web service for programmatic access
 - **📈 Comprehensive Reporting**: Multiple output formats (JSON, CSV, Markdown) for different use cases
 - **⚡ Caching System**: Intelligent caching to minimize API costs and improve performance
+- **🐳 Docker Ready**: Complete Docker setup with Langfuse for production deployment
+- **🔍 LLM Observability**: Integrated Langfuse tracing for monitoring and evaluation
+
+## ⚡ One-Command Quick Start
+
+```bash
+# Clone and setup (includes Docker + Langfuse)
+git clone https://github.com/your-username/be-invest.git
+cd be-invest
+cp .env.example .env          # Copy environment template
+# Edit .env with your API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
+
+# Start all services (API + Langfuse + Database)
+docker-compose up -d
+
+# Done! Access:
+# API:     http://localhost:8000/docs
+# Langfuse: http://localhost:3000
+```
+
+For alternative setup options and detailed instructions, see [Quick Start](#-quick-start) below.
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
+#### Option 1: Docker (Recommended)
+- **Docker** 20.10+ - [Download Docker Desktop](https://www.docker.com/products/docker-desktop)
+- **Docker Compose** 1.29+ - Usually included with Docker Desktop
+- **API Keys** - OpenAI or Anthropic (for LLM services)
+
+#### Option 2: Local Development
 - **Python 3.9+** - [Download Python](https://python.org/downloads/)
 - **Git** - [Download Git](https://git-scm.com/downloads) 
 - **API Key** - Get one from [OpenAI](https://platform.openai.com/api-keys) or [Anthropic](https://console.anthropic.com/)
 
 ### Installation & Setup
+
+#### Docker Setup (Recommended)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-username/be-invest.git
+cd be-invest
+
+# 2. Create .env file with your API keys
+cp .env.example .env
+# Edit .env with your OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
+
+# 3. Run setup (choose one):
+# Linux/Mac:
+bash docker-deploy.sh setup
+
+# Windows:
+docker-deploy.bat setup
+
+# Or use docker-compose directly:
+docker-compose up -d
+```
+
+This starts:
+- **be-invest** API on http://localhost:8000
+- **Langfuse** on http://localhost:3000 (for LLM tracing)
+- **PostgreSQL** database (persistence)
+
+#### Local Development Setup
 
 ```bash
 # 1. Clone the repository
@@ -50,6 +106,22 @@ set OPENAI_API_KEY=your-openai-key-here
 
 ### Run Your First Analysis
 
+#### With Docker (Recommended)
+
+```bash
+# API is already running at http://localhost:8000/docs
+
+# Generate cost analysis
+curl http://localhost:8000/cost-analysis
+
+# Generate cost comparison tables
+curl "http://localhost:8000/cost-comparison-tables?lang=en"
+
+# View Langfuse tracing at http://localhost:3000
+```
+
+#### Local Development
+
 ```bash
 # Generate a complete broker fee analysis
 python scripts/analyze_broker_fees.py
@@ -65,6 +137,16 @@ Analysis completed!
 
 ### Start the Web API
 
+#### Docker (Recommended)
+```bash
+# Already running! Just verify:
+docker-compose ps
+
+# Open http://localhost:8000/docs for interactive API documentation
+# Open http://localhost:3000 for Langfuse observability dashboard
+```
+
+#### Local Development
 ```bash
 # Start the API server
 uvicorn be_invest.api.server:app --reload
@@ -76,31 +158,54 @@ uvicorn be_invest.api.server:app --reload
 
 ```bash
 # Check API health
-curl http://localhost:8000/api/health
+curl http://localhost:8000/health
 
-# Compare brokers for a 1000€ ETF trade
-curl -X POST http://localhost:8000/api/compare \
+# List all brokers
+curl http://localhost:8000/brokers
+
+# Get cost analysis
+curl http://localhost:8000/cost-analysis
+
+# Generate comparison tables
+curl "http://localhost:8000/cost-comparison-tables?lang=en&model=claude-sonnet-4-20250514"
+
+# Chat about brokers (natural language)
+curl -X POST "http://localhost:8000/chat" \
   -H "Content-Type: application/json" \
   -d '{
-    "trade_amount": 1000,
-    "instrument_type": "ETFs",
-    "brokers": ["Bolero", "Keytrade Bank", "Degiro Belgium"]
+    "question": "Which broker is cheapest for ETF trading?",
+    "model": "groq/llama-3.3-70b-versatile",
+    "lang": "en"
   }'
+
+# Scrape and analyze broker fees
+curl -X POST "http://localhost:8000/refresh-and-analyze" \
+  -H "Content-Type: application/json"
+
+# Get latest broker news
+curl http://localhost:8000/news/recent?limit=10
 ```
 
 ### What You Get
 
-After running the analysis, you'll find these reports in `data/output/analysis/`:
+#### Docker Output
+- **API Documentation**: http://localhost:8000/docs (interactive)
+- **Langfuse Dashboard**: http://localhost:3000 (LLM tracing & observability)
+- **Data Persistence**: `data/output/` (JSON analysis files)
 
-- **`summary_report.md`** - Executive summary with key findings
-- **`cheapest_by_trade_size.json`** - Best broker for each trade size
-- **`cheapest_by_scenario.json`** - Best broker for different investor profiles  
-- **`full_broker_analysis.csv`** - Complete data for spreadsheet analysis
+#### Analysis Reports
+After running analysis, find reports in `data/output/`:
 
-**Key Insights Example:**
-- €250 trades: Keytrade Bank (€0.47) for ETFs
-- €1000 trades: Degiro Belgium (€1.00) for ETFs
-- €5000 trades: Degiro Belgium (€1.00) for ETFs
+- **`broker_cost_analyses.json`** - Complete broker fee structures
+- **`cost_comparison_tables.json`** - Side-by-side fee comparison
+- **`financial_analysis_*.json`** - Detailed investment scenarios
+
+**Available Data:**
+- €250-€50,000 transaction fee estimates
+- ETF, Stock, and Bond pricing
+- Custody and hidden cost analysis
+- Investor persona cost rankings
+- Multi-language support (English, French, Dutch)
 
 ## 📋 Supported Brokers
 
@@ -182,7 +287,51 @@ be-invest/
 - Detection of common extraction errors (missing handling fees, wrong market data)
 - Comprehensive test suite with realistic broker document samples
 
-## 📈 Example Analysis Results
+## � Docker & Langfuse Integration
+
+### Production-Ready Containerization
+
+Be-Invest now includes complete Docker support for easy deployment and scaling:
+
+**Docker Components:**
+- **Multi-stage Dockerfile** - Optimized Python 3.9 image with minimal footprint
+- **docker-compose.yml** - Complete stack: be-invest API + Langfuse + PostgreSQL
+- **Health checks** - Automatic monitoring and recovery
+- **Volume persistence** - Data and database persistence across restarts
+- **Network isolation** - Internal Docker network for secure service communication
+
+### Langfuse Integration
+
+**Complete LLM Observability:**
+- **Trace Tracking** - Every LLM call is automatically traced
+- **Cost Monitoring** - Track tokens used and API costs
+- **Quality Scoring** - Automatic evaluation of LLM outputs
+- **Performance Metrics** - Monitor latency and throughput
+- **Web Dashboard** - Beautiful UI at http://localhost:3000
+
+**Integrated Evaluations:**
+- Groundedness scoring for financial data accuracy
+- Hallucination detection in fee comparisons
+- JSON validity checks on structured outputs
+- Data completeness scoring
+
+### Quick Docker Setup
+
+```bash
+# One-command setup (includes Langfuse automatically)
+bash docker-deploy.sh setup
+
+# Or for Windows
+docker-deploy.bat setup
+
+# Access services
+# API: http://localhost:8000/docs
+# Langfuse: http://localhost:3000
+```
+
+See **[DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)** for comprehensive installation, configuration, and troubleshooting guides.
+
+## �📈 Example Analysis Results
 
 ```json
 {
@@ -208,21 +357,48 @@ be-invest/
 
 ## 🌐 API Endpoints
 
-### Core Endpoints
-
+### Health & Status
 ```http
-GET /api/brokers                    # List all brokers
-GET /api/brokers/{name}/fees        # Get fees for specific broker
-POST /api/analyze                   # Run cost analysis
-GET /api/health                     # Health check
+GET /health                           # Application health check
 ```
 
-### Analysis Endpoints
-
+### Broker Information
 ```http
-POST /api/compare                   # Compare multiple brokers
-GET /api/cheapest/{amount}          # Find cheapest for trade size
-POST /api/scenarios                 # Investment scenario analysis
+GET /brokers                          # List all configured brokers
+GET /cost-analysis                    # Get comprehensive cost analysis
+GET /cost-analysis/{broker_name}      # Get specific broker analysis
+```
+
+### Cost Comparison & Analysis
+```http
+GET /cost-comparison-tables           # Generate cost comparison tables (with language support)
+POST /refresh-and-analyze             # Refresh PDFs and analyze broker fees
+GET /financial-analysis               # Generate detailed financial analysis
+POST /refresh-pdfs                    # Refresh broker fee documents (PDFs)
+```
+
+### News Management
+```http
+GET /news                             # Get all news flashes
+GET /news/broker/{broker_name}        # Get broker-specific news
+GET /news/recent                      # Get recent news (default limit: 10)
+GET /news/statistics                  # Get news data statistics
+POST /news/scrape                     # Trigger automated news scraping
+POST /news                            # Add new news flash (POST body)
+DELETE /news                          # Delete specific news flash
+```
+
+### Interactive Chat
+```http
+POST /chat                            # Chat about brokers with natural language
+                                      # Supports multiple LLM models and languages
+```
+
+### Documentation
+```http
+GET /docs                             # Swagger UI interactive documentation
+GET /redoc                            # ReDoc alternative documentation
+GET /openapi.json                     # OpenAPI specification
 ```
 
 See [API Documentation](docs/API.md) for detailed endpoint specifications.
@@ -268,6 +444,73 @@ python scripts/final_verification.py
 
 ## 🚀 Deployment
 
+### Docker Deployment (Recommended for Production)
+
+Be-Invest includes complete Docker support with Langfuse integration for LLM tracing and observability.
+
+#### Quick Start with Docker
+
+```bash
+# 1. Create environment file
+cp .env.example .env
+nano .env  # Edit with your API keys
+
+# 2. Build and start all services
+docker-compose up -d
+
+# 3. Check services are running
+docker-compose ps
+
+# 4. Access the application
+# API: http://localhost:8000/docs
+# Langfuse: http://localhost:3000
+```
+
+#### Deployment Helper Scripts
+
+For easier management, use the provided helper scripts:
+
+**Linux/Mac:**
+```bash
+bash docker-deploy.sh setup    # Full setup
+bash docker-deploy.sh start    # Start services
+bash docker-deploy.sh logs     # View logs
+bash docker-deploy.sh health   # Check health
+bash docker-deploy.sh help     # Show all commands
+```
+
+**Windows:**
+```cmd
+docker-deploy.bat setup       :: Full setup
+docker-deploy.bat start       :: Start services
+docker-deploy.bat logs        :: View logs
+docker-deploy.bat health      :: Check health
+docker-deploy.bat help        :: Show all commands
+```
+
+#### What's Included
+
+```
+docker-compose.yml      # Multi-container orchestration
+Dockerfile              # Be-Invest application image
+.dockerignore          # Optimize Docker build
+.env.example           # Environment variable template
+```
+
+Services:
+- **be-invest**: FastAPI application (port 8000)
+- **langfuse-server**: LLM observability UI (port 3000)
+- **langfuse-db**: PostgreSQL database (port 5433)
+
+#### More Information
+
+See **[DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)** for:
+- Detailed configuration options
+- Production deployment guide
+- Troubleshooting common issues
+- Backup and maintenance procedures
+- Scaling and monitoring setup
+
 ### Local Development
 
 ```bash
@@ -289,22 +532,18 @@ vercel
 
 # Environment variables required:
 # - OPENAI_API_KEY or ANTHROPIC_API_KEY
-```
-
-### Docker Deployment
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY . .
-RUN pip install -e .
-EXPOSE 8000
-CMD ["uvicorn", "be_invest.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
+# - LANGFUSE_PUBLIC_KEY (if tracing enabled)
+# - LANGFUSE_SECRET_KEY (if tracing enabled)
 ```
 
 ## 📚 Documentation
 
-For complete documentation, see the **[docs/ folder](docs/)** which contains:
+### Getting Started
+- **[DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)** ⭐ - Complete Docker setup and deployment guide (recommended)
+- **[.env.example](.env.example)** - Environment variable configuration template
+
+### Additional Resources
+For more detailed documentation, see the **[docs/ folder](docs/)** which contains:
 
 - **[API Reference](docs/API.md)** - Complete API documentation
 - **[React Integration](docs/REACT_INTEGRATION.md)** - Frontend integration guide with examples
@@ -341,6 +580,22 @@ python -m pytest tests/ -v
 ## 🆘 Support
 
 ### Common Issues
+
+**Docker Setup Issues**
+- Check Docker daemon is running: `docker ps`
+- Verify ports are available: `docker-compose ps`
+- Check logs: `docker-compose logs be-invest`
+- See **[DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md#troubleshooting)** for detailed Docker troubleshooting
+
+**Langfuse Connection**
+- Verify Langfuse is running: `curl http://localhost:3000`
+- Check environment variables in .env file
+- Restart be-invest container after updating .env: `docker-compose restart be-invest`
+
+**API Key Issues**
+- Ensure .env file has correct keys (copy from .env.example)
+- For Docker: API keys should be in .env file before running `docker-compose up`
+- Local development: Set environment variables before running uvicorn
 
 **LLM Extraction Errors**
 - Ensure API keys are set correctly

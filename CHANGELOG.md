@@ -5,6 +5,19 @@ All notable changes to the BE-Invest project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] - 2026-02-27 - Critical Fee Calculation Fix
+
+### Fixed
+- **CRITICAL: Removed Incorrect Base Fee in tiered_flat_then_slice Pattern**: Fixed calculation logic that was incorrectly adding the highest flat tier fee as a "base" when amounts exceeded all flat tiers. Flat tiers and slice tiers are separate pricing categories, not additive.
+  - **Impact**: Bolero EUR 5,000 now correctly calculates as EUR 15.00 (was EUR 22.50)
+  - **Impact**: Bolero EUR 10,000 now correctly calculates as EUR 15.00 (was EUR 22.50)
+  - **Impact**: Rebel EUR 5,000 now correctly calculates as EUR 10.00 (was EUR 13.00)
+  - **Impact**: Rebel EUR 10,000 now correctly calculates as EUR 10.00 (was EUR 13.00)
+  - **Affected Brokers**: Bolero, Keytrade Bank, Rebel
+  - **Root Cause**: Previous "Bolero Fee Correction" in v0.2.0 introduced incorrect additive logic
+- **Updated LLM Judge Validation Rules**: Corrected pattern description to match fixed calculation logic
+- **Updated Explanation Generator**: Removed incorrect "base +" text from fee explanations
+
 ## [0.2.1] - 2025-12-17 - Documentation Cleanup
 
 ### Changed

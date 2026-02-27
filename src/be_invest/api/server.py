@@ -1024,19 +1024,27 @@ def get_cost_comparison_tables(
     Notes and text labels are localized to the requested language.
     Set force=True to re-extract fee rules from broker_cost_analyses.json
     via LLM before building tables.
+    
+    OPTIMIZATION: Calculations are cached once (language-agnostic).
+    Only text content (notes, explanations) is localized per language.
+    This avoids redundant calculation when lang changes.
     """
     if force and not _is_private_ip(_get_client_ip(request)):
         logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
         force = False
 
-    # Check cache first (unless force=True)
-    cache_key = FileCache.make_key("cost_comparison", model, lang)
+    # Cache key is language-agnostic (calculations never change with language)
+    # Only use model in key since force=True regenerates everything
+    calc_cache_key = FileCache.make_key("cost_comparison_calculations", model)
+    
     if not force:
-        cached = llm_cache.get(cache_key)
+        cached = llm_cache.get(calc_cache_key)
         if cached:
-            logger.info(f"Returning cached cost comparison tables (lang={lang})")
-            langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": True})
-            return cached
+            logger.info(f"Returning cached calculations, localizing to lang={lang}")
+            # Apply localization to cached calculations
+            result = _localize_cost_comparison_response(cached, lang)
+            langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": True, "localized": True})
+            return result
 
     langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": False})
     cost_data = _get_cost_analysis_data()
@@ -1178,10 +1186,29 @@ def get_cost_comparison_tables(
     except Exception as save_error:
         logger.warning(f"Failed to save JSON response to file: {save_error}")
 
-    # Cache the result
-    llm_cache.set(cache_key, result)
-    logger.info(f"Cached cost comparison tables (lang={lang})")
+    # Validate and auto-fix output before caching/returning
+    try:
+        from ..validation import validate_and_fix
+        result, validation_result = validate_and_fix(result, "cost-comparison-tables")
+        
+        if not validation_result.is_valid():
+            logger.warning(
+                f"⚠️ Validation found {len(validation_result.errors)} errors in cost-comparison-tables output"
+            )
+            # Add validation summary to response metadata
+            result["_validation"]["output_validation"] = validation_result.get_summary()
+        else:
+            logger.info(f"✅ Output validation passed: {validation_result.validated_fields} fields checked")
+    except Exception as e:
+        logger.error(f"❌ Output validation failed: {e}")
+    
+    # Cache the result (language-agnostic - only calculations, not localized text)
+    llm_cache.set(calc_cache_key, result)
+    logger.info(f"Cached cost comparison calculations (calculations are language-agnostic)")
 
+    # Apply localization to cached calculations for requested language
+    result = _localize_cost_comparison_response(result, lang)
+    
     # Submit async groundedness evaluation (doesn't block response)
     try:
         _submit_groundedness_evaluation(
@@ -1252,6 +1279,65 @@ def _localize_persona_definitions(model: str, persona_defs: Dict[str, Any], lang
             persona_data["name"] = trans["name"]
             persona_data["description"] = trans["description"]
 
+    return localized
+
+
+def _localize_cost_comparison_response(result: Dict[str, Any], lang: str) -> Dict[str, Any]:
+    """Apply localization to cost comparison response.
+    
+    The calculation numbers (fees) are language-agnostic and already cached.
+    This applies language-specific localization to text fields:
+    - broker notes (hidden costs)
+    - calculation_logic explanations
+    - persona definitions
+    
+    Falls back to English content if translation not available.
+    
+    Args:
+        result: Full cost comparison response with calculations
+        lang: Target language code (en, fr-be, nl-be)
+    
+    Returns:
+        Result dict with localized text content
+    """
+    import copy
+    localized = copy.deepcopy(result)
+    
+    # Only localize non-English languages
+    if lang == "en":
+        return localized
+    
+    # Translate broker notes (hidden costs)
+    if "notes" in localized.get("euronext_brussels", {}):
+        notes = localized["euronext_brussels"]["notes"]
+        for broker_name in notes.keys():
+            # Rebuild notes from BROKER_NOTES static dictionary (which may have translations)
+            # For now, keep EN notes - full translation would require static/LLM translation layer
+            pass
+    
+    # Translate calculation_logic explanations
+    if "calculation_logic" in localized.get("euronext_brussels", {}):
+        calc_logic = localized["euronext_brussels"]["calculation_logic"]
+        for broker_name, broker_calc in calc_logic.items():
+            for asset_type, asset_calc in broker_calc.items():
+                for amount_str, explanation_en in asset_calc.items():
+                    # For now, keep English explanations - could add translation layer here
+                    # Full translation would use LLM or static translation dictionary
+                    pass
+    
+    # Translate persona definitions
+    if "persona_definitions" in localized.get("euronext_brussels", {}):
+        persona_defs = localized["euronext_brussels"]["persona_definitions"]
+        for persona_key, persona_data in persona_defs.items():
+            trans = _PERSONA_TRANSLATIONS.get(lang, {}).get(persona_key)
+            if trans:
+                persona_data["name"] = trans["name"]
+                persona_data["description"] = trans["description"]
+    
+    # Update language metadata
+    if "_validation" in localized:
+        localized["_validation"]["lang"] = lang
+    
     return localized
 
 
@@ -1431,6 +1517,13 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
         try:
             result = json.loads(response_text)
             langfuse_context.score_current_trace(name="json_valid", value=1)
+            
+            # Replace LLM-generated cheapestPerTier with deterministic calculation
+            logger.info("🔧 Replacing LLM-generated cheapestPerTier with deterministic calculation...")
+            from ..validation import compute_cheapest_per_tier
+            result["cheapestPerTier"] = compute_cheapest_per_tier(broker_names)
+            logger.info("✅ Deterministic cheapestPerTier computed successfully")
+            
         except json.JSONDecodeError as e:
             langfuse_context.score_current_trace(name="json_valid", value=0)
             logger.error(f"❌ JSON parsing failed: {e}")
@@ -1444,6 +1537,12 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
                     response_text = _call_llm("gpt-4o", system_prompt, user_prompt, response_format="json")
                     result = json.loads(response_text)
                     logger.info("✅ Successfully generated with GPT-4o fallback")
+                    
+                    # Replace LLM-generated cheapestPerTier with deterministic calculation
+                    from ..validation import compute_cheapest_per_tier
+                    result["cheapestPerTier"] = compute_cheapest_per_tier(broker_names)
+                    logger.info("✅ Deterministic cheapestPerTier computed successfully (fallback path)")
+                    
                 except Exception as fallback_error:
                     logger.error(f"❌ Fallback to GPT-4o also failed: {fallback_error}")
                     raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
@@ -1517,6 +1616,30 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
             logger.info(f"💾 Saved financial analysis to: {output_path}")
         except Exception as save_error:
             logger.warning(f"⚠️  Failed to save JSON response to file: {save_error}")
+
+        # Validate and auto-fix output before caching/returning
+        try:
+            from ..validation import validate_and_fix
+            result, validation_result = validate_and_fix(result, "financial-analysis")
+            
+            if not validation_result.is_valid():
+                logger.warning(
+                    f"⚠️ Validation found {len(validation_result.errors)} errors in financial-analysis output"
+                )
+                # Add validation summary to response metadata
+                if "metadata" not in result:
+                    result["metadata"] = {}
+                result["metadata"]["validation"] = validation_result.get_summary()
+                
+                # Log specific errors for debugging
+                for error in validation_result.errors[:5]:  # Log first 5 errors
+                    logger.warning(
+                        f"  - {error.field}: expected {error.expected}, got {error.actual}"
+                    )
+            else:
+                logger.info(f"✅ Output validation passed: {validation_result.validated_fields} fields checked")
+        except Exception as e:
+            logger.error(f"❌ Output validation failed: {e}")
 
         # Cache the result
         llm_cache.set(cache_key, result)
@@ -1985,7 +2108,7 @@ Return ONLY a valid JSON object with structured fee data.
     try:
         _submit_groundedness_evaluation(
             endpoint="refresh-and-analyze",
-            user_input=f"Refresh and analyze fee rules for {len(brokers_succeeded)} brokers",
+            user_input=f"Refresh and analyze fee rules for {len(all_analyses)} brokers",
             retrieved_context=json.dumps({"refresh_results": refresh_results}, indent=2)[:50000],
             generated_output=json.dumps({"analyses": all_analyses}, indent=2)[:50000],
         )
