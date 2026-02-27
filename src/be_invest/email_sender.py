@@ -253,10 +253,18 @@ def send_email(subject: str, html_body: str, recipients: list[str]) -> None:
     msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
+    # Use certifi CA bundle if available (fixes SSL cert issues on Windows/macOS);
+    # fall back to system default context otherwise.
+    try:
+        import certifi
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        ssl_context = ssl.create_default_context()
+
     logger.info(f"📧 Sending email to {recipients} via {SMTP_HOST}:{SMTP_PORT}")
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
         server.ehlo()
-        server.starttls(context=ssl.create_default_context())
+        server.starttls(context=ssl_context)
         server.ehlo()
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.sendmail(from_addr, recipients, msg.as_string())
