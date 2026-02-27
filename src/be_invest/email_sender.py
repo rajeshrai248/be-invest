@@ -23,6 +23,7 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", SMTP_USER)
+SMTP_SKIP_VERIFY = os.environ.get("SMTP_SKIP_VERIFY", "false").lower() == "true"
 
 
 def _get_recipients() -> list[str]:
@@ -253,13 +254,18 @@ def send_email(subject: str, html_body: str, recipients: list[str]) -> None:
     msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    # Use certifi CA bundle if available (fixes SSL cert issues on Windows/macOS);
-    # fall back to system default context otherwise.
-    try:
-        import certifi
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
+    if SMTP_SKIP_VERIFY:
+        logger.warning("⚠️  SMTP_SKIP_VERIFY=true — SSL certificate verification is disabled")
         ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+    else:
+        # Use certifi CA bundle if available (fixes cert chain issues on Windows/macOS)
+        try:
+            import certifi
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            ssl_context = ssl.create_default_context()
 
     logger.info(f"📧 Sending email to {recipients} via {SMTP_HOST}:{SMTP_PORT}")
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
