@@ -68,6 +68,16 @@ services:
       # Application Settings
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       NEWS_SCRAPE_INTERVAL_HOURS: ${NEWS_SCRAPE_INTERVAL_HOURS:-24}
+
+      # Email Report Scheduler
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
+      EMAIL_RECIPIENTS: ${EMAIL_RECIPIENTS:-}
+      EMAIL_SEND_HOUR_UTC: ${EMAIL_SEND_HOUR_UTC:-8}
+      EMAIL_SCHEDULER_ENABLED: ${EMAIL_SCHEDULER_ENABLED:-true}
       
       # Python
       PYTHONUNBUFFERED: 1

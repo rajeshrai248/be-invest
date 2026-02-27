@@ -86,6 +86,11 @@ class ChatRequest(BaseModel):
     lang: Optional[str] = "en"
 
 
+class EmailSendRequest(BaseModel):
+    """Request model for manual email report trigger."""
+    recipients: Optional[List[str]] = None
+
+
 # ========================================================================================
 # LANGUAGE SUPPORT
 # ========================================================================================
@@ -255,6 +260,7 @@ _VALID_PATH_PREFIXES = frozenset({
     "/financial-analysis", "/brokers", "/summary",
     "/refresh-pdfs", "/refresh-and-analyze",
     "/news", "/chat", "/docs", "/openapi.json", "/redoc",
+    "/email",
 })
 
 
@@ -424,6 +430,13 @@ _news_scrape_timer: Optional[threading.Timer] = None
 _last_news_scrape_at: Optional[datetime] = None
 _news_scrape_in_progress = False
 
+_EMAIL_SCHEDULER_ENABLED = os.environ.get("EMAIL_SCHEDULER_ENABLED", "true").lower() == "true"
+_EMAIL_SEND_HOUR_UTC = int(os.environ.get("EMAIL_SEND_HOUR_UTC", "8"))  # send at 08:00 UTC by default
+_EMAIL_SEND_DAYS = (5, 15)  # fixed calendar days each month
+_email_scheduler_timer: Optional[threading.Timer] = None
+_last_email_sent_at: Optional[datetime] = None
+_email_send_in_progress = False
+
 
 def _build_news_response(brokers_processed: int, newly_scraped: int, brokers_to_scrape: Optional[List[str]] = None) -> dict:
     """Build a news response that includes recent news from news.jsonl (last 30 days)."""
@@ -515,6 +528,59 @@ def _run_scheduled_news_scrape() -> None:
         _news_scrape_timer.start()
         next_run = datetime.now(timezone.utc).isoformat(timespec="seconds")
         logger.info(f"⏰ Next scheduled news scrape in {_NEWS_SCRAPE_INTERVAL_HOURS}h (approx {next_run})")
+
+
+def _next_email_send_time() -> datetime:
+    """Return the next scheduled send datetime (5th or 15th of the month at EMAIL_SEND_HOUR_UTC)."""
+    now = datetime.now(timezone.utc)
+    # Search across enough months to always find the next candidate
+    candidates = []
+    for month_offset in range(3):
+        year = now.year
+        month = now.month + month_offset
+        while month > 12:
+            month -= 12
+            year += 1
+        for day in _EMAIL_SEND_DAYS:
+            try:
+                candidate = datetime(year, month, day, _EMAIL_SEND_HOUR_UTC, 0, 0, tzinfo=timezone.utc)
+                if candidate > now:
+                    candidates.append(candidate)
+            except ValueError:
+                pass  # invalid date (e.g., Feb 30) — skip
+    return min(candidates)
+
+
+def _schedule_next_email() -> None:
+    """Set a timer for the next scheduled email send date."""
+    global _email_scheduler_timer
+    next_run = _next_email_send_time()
+    delay_secs = (next_run - datetime.now(timezone.utc)).total_seconds()
+    _email_scheduler_timer = threading.Timer(delay_secs, _run_scheduled_email_report)
+    _email_scheduler_timer.daemon = True
+    _email_scheduler_timer.start()
+    logger.info(f"⏰ Next email report scheduled for {next_run.strftime('%Y-%m-%d %H:%M UTC')}")
+
+
+def _run_scheduled_email_report() -> None:
+    """Background job: build and send broker fee email report, then schedule the next one."""
+    global _last_email_sent_at, _email_send_in_progress
+
+    _email_send_in_progress = True
+    logger.info("=" * 60)
+    logger.info("📧 Scheduled email report starting")
+    logger.info("=" * 60)
+
+    try:
+        from ..email_sender import build_and_send_report
+        result = build_and_send_report()
+        _last_email_sent_at = datetime.now(timezone.utc)
+        logger.info(f"✅ Email sent to {result['recipients']}")
+    except Exception:
+        logger.error("❌ Scheduled email report failed", exc_info=True)
+    finally:
+        _email_send_in_progress = False
+        _schedule_next_email()
 
 
 def _default_output_dir() -> Path:
@@ -2919,23 +2985,57 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
 
 
 # ========================================================================================
+# EMAIL REPORT ENDPOINT
+# ========================================================================================
+
+@app.post("/email/send")
+@time_api_call
+def send_email_report(body: EmailSendRequest = Body(default=EmailSendRequest())):
+    """Manually trigger an immediate broker fee report email."""
+    global _email_send_in_progress, _last_email_sent_at
+    if _email_send_in_progress:
+        raise HTTPException(status_code=409, detail="Email send already in progress.")
+    try:
+        from ..email_sender import build_and_send_report
+        result = build_and_send_report(recipients_override=body.recipients or None)
+        _last_email_sent_at = datetime.now(timezone.utc)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"❌ Manual email send failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Email send failed: {e}")
+
+
+# ========================================================================================
 # STARTUP / SHUTDOWN
 # ========================================================================================
 
 @app.on_event("startup")
 def _start_news_scrape_scheduler():
-    """Kick off the first scheduled news scrape after a short delay."""
+    """Kick off the first scheduled news scrape and email report after short delays."""
     delay_secs = 30
     logger.info(f"📰 News scrape scheduler: first run in {delay_secs}s (interval={_NEWS_SCRAPE_INTERVAL_HOURS}h)")
     timer = threading.Timer(delay_secs, _run_scheduled_news_scrape)
     timer.daemon = True
     timer.start()
 
+    if _EMAIL_SCHEDULER_ENABLED:
+        logger.info(
+            f"📧 Email report scheduler enabled — sends on the 5th and 15th of each month "
+            f"at {_EMAIL_SEND_HOUR_UTC:02d}:00 UTC"
+        )
+        _schedule_next_email()
+    else:
+        logger.info("📧 Email report scheduler is DISABLED (EMAIL_SCHEDULER_ENABLED=false)")
+
 
 @app.on_event("shutdown")
 def _flush_langfuse():
     """Ensure all Langfuse traces are sent before the process exits."""
-    global _news_scrape_timer
+    global _news_scrape_timer, _email_scheduler_timer
     if _news_scrape_timer is not None:
         _news_scrape_timer.cancel()
+    if _email_scheduler_timer is not None:
+        _email_scheduler_timer.cancel()
     langfuse_context.flush()
