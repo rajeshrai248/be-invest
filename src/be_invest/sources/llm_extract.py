@@ -207,7 +207,7 @@ def extract_fee_records_via_llm(
     broker: str,
     source_url: str,
     *,
-    model: str = "gpt-4o",
+    model: str = "claude-sonnet-4-6",
     llm_cache_dir: Optional[os.PathLike] = None,
     max_output_tokens: int = 2000,
     temperature: float = 0.0,

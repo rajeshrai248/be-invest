@@ -610,7 +610,7 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
     Unified LLM caller supporting both OpenAI (gpt-*) and Anthropic (claude-*) models.
 
     Args:
-        model: Model name (e.g., "gpt-4o", "claude-sonnet-4-20250514")
+        model: Model name (e.g., "gpt-4o", "claude-sonnet-4-6")
         system_prompt: System message content
         user_prompt: User message content
         response_format: "json" for JSON mode, "text" for regular text
@@ -1079,7 +1079,7 @@ def get_cost_analysis() -> Dict[str, Any]:
 @observe(name="cost-comparison-tables")
 def get_cost_comparison_tables(
         request: Request,
-        model: str = Query("claude-sonnet-4-20250514", description="LLM to use for notes generation"),
+        model: str = Query("claude-sonnet-4-6", description="LLM to use for notes generation"),
         force: bool = Query(False, description="Force fresh generation, ignore cache"),
         lang: str = Query("en", description="Response language: en, fr-be, nl-be")
 ) -> Dict[str, Any]:
@@ -1412,7 +1412,7 @@ def _localize_cost_comparison_response(result: Dict[str, Any], lang: str) -> Dic
 @observe(name="financial-analysis")
 def generate_financial_analysis(
         request: Request,
-        model: str = Query("claude-sonnet-4-20250514", description="LLM to use: claude-sonnet-4-20250514 (default), gpt-4o"),
+        model: str = Query("claude-sonnet-4-6", description="LLM to use: claude-sonnet-4-6 (default), gpt-4o"),
         force: bool = Query(False, description="Force fresh generation, ignore cache"),
         lang: str = Query("en", description="Response language: en, fr-be, nl-be")
 ) -> Dict[str, Any]:
@@ -1890,6 +1890,36 @@ def _clear_pdf_text_dir(directory: Path, keep: Optional[List[str]] = None) -> No
         logger.error(f"❌ Error clearing PDF text directory: {exc}")
 
 
+def _cleanup_stale_output_files(output_dir: Path) -> int:
+    """Delete accumulated financial_analysis_*.json files from the output directory.
+
+    Called at the start of /refresh-and-analyze so stale snapshots from previous
+    runs don't accumulate indefinitely.  Other output files (broker_cost_analyses.json,
+    fee_rules.json, cost_comparison_tables.json) are overwritten in-place each run
+    and are therefore excluded from cleanup.
+
+    Returns the number of files removed.
+    """
+    if not output_dir.exists():
+        return 0
+
+    removed = 0
+    for path in output_dir.glob("financial_analysis_*.json"):
+        try:
+            path.unlink()
+            logger.info(f"🗑️  Removed stale file: {path.name}")
+            removed += 1
+        except Exception as exc:
+            logger.warning(f"⚠️  Could not remove {path.name}: {exc}")
+
+    if removed:
+        logger.info(f"✅ Cleaned up {removed} stale financial_analysis file(s)")
+    else:
+        logger.info("📂 No stale financial_analysis files to clean up")
+
+    return removed
+
+
 @app.get("/cost-analysis/{broker_name}")
 @time_api_call
 def get_broker_cost_analysis(broker_name: str) -> Dict[str, Any]:
@@ -1951,7 +1981,7 @@ def refresh_and_analyze(
         brokers_to_process: Optional[List[str]] = Query(None,
                                                         description="Specific brokers to analyze (if None, analyzes all)"),
         force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
-        model: str = Query("claude-sonnet-4-20250514", description="LLM model: claude-sonnet-4-20250514 (default), gpt-4o, etc."),
+        model: str = Query("claude-sonnet-4-6", description="LLM model: claude-sonnet-4-6 (default), gpt-4o, etc."),
 ) -> Dict[str, Any]:
     """
     Refresh PDFs, extract text, and generate comprehensive cost analysis.
@@ -1992,11 +2022,14 @@ def refresh_and_analyze(
 
     logger.info(f"📋 Processing {len(brokers_list)} broker(s): {', '.join(b.name for b in brokers_list)}")
 
-    # Step 2: Clear old PDF text files and prepare output directory
+    # Step 2: Clear old PDF text files and stale output snapshots
     output_dir = _default_pdf_text_dir()
 
     logger.info("🧹 Clearing old PDF text files...")
     _clear_pdf_text_dir(output_dir, keep=[".gitkeep"])
+
+    logger.info("🧹 Cleaning up stale financial_analysis snapshot files...")
+    _cleanup_stale_output_files(_default_output_dir())
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2256,6 +2289,24 @@ TIER TYPES:
 - {{"per_slice": 10000, "fee": 15.00}} - per-started-slice (no up_to means it applies after all flat tiers)
 - {{"per_slice": 10000, "fee": 15.00, "max_fee": 50.00}} - per-slice with fee cap
 - {{"rate": 0.0035, "min_fee": 1.00}} - percentage rate with minimum
+
+CRITICAL — TWO DIFFERENT NUMERIC CONVENTIONS ARE USED IN THE SAME JSON:
+
+1. TIER "rate" fields (inside the "tiers" array) use DECIMAL FRACTIONS:
+   The calculator does: fee = amount * rate — so rate must be a decimal fraction.
+   - rate: 0.0035 means 0.35% commission
+   - rate: 0.0025 means 0.25% commission
+   - rate: 0.005  means 0.50% commission
+   - WRONG: rate=0.35 for a 0.35% fee. RIGHT: rate=0.0035 for a 0.35% fee.
+   - WRONG: rate=0.25 for a 0.25% fee. RIGHT: rate=0.0025 for a 0.25% fee.
+
+2. "_pct" fields in "hidden_costs" use PERCENTAGE NOTATION (NOT decimal fractions):
+   - fx_fee_pct: 0.25 means 0.25%, NOT 25%. A value of 1.0 means 1%. A value of 1.40 means 1.40%.
+   - custody_fee_monthly_pct: 0.0242 means 0.0242% per month. A value of 2.0 means 2% per month.
+   - dividend_fee_pct: 2.42 means 2.42%. A value of 2.0 means 2%. Do NOT write 0.02 to mean 2%.
+   - connectivity_fee_max_pct_account follows the same rule.
+   - WRONG: dividend_fee_pct=0.02 for a 2% fee. RIGHT: dividend_fee_pct=2.0 for a 2% fee.
+   - WRONG: fx_fee_pct=0.0025 for a 0.25% fee. RIGHT: fx_fee_pct=0.25 for a 0.25% fee.
 
 IMPORTANT:
 - Extract ALL tiers from the data. Many brokers have 4-5 tiers, not just 2.

@@ -18,7 +18,7 @@ from typing import Optional, Dict, List
 
 logger = logging.getLogger(__name__)
 
-TRANSACTION_SIZES = [250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000]
+TRANSACTION_SIZES = [50, 100, 250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000]
 ASSET_TYPES = ["stocks", "etfs", "bonds"]
 
 

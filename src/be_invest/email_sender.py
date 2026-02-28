@@ -152,8 +152,11 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
 
 
 def _fmt_pct(val: float, suffix: str = "") -> str:
-    """Format a percentage value, returning '—' if zero."""
-    return f"{val * 100:.2f}%{suffix}" if val else "—"
+    """Format a percentage value, returning '—' if zero.
+
+    Values in fee_rules.json are stored as percentages (e.g. 0.25 means 0.25%).
+    """
+    return f"{val:.2f}%{suffix}" if val else "—"
 
 
 def _fmt_eur(val: float, suffix: str = "") -> str:
@@ -208,7 +211,7 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
         g = c if isinstance(c, dict) else c.__dict__
 
         custody = (
-            f"{g.get('custody_fee_monthly_pct', 0) * 100:.3f}%/mo"
+            f"{g.get('custody_fee_monthly_pct', 0):.4f}%/mo"
             + (f" (min {_fmt_eur(g.get('custody_fee_monthly_min', 0))})" if g.get('custody_fee_monthly_min') else "")
             if g.get('custody_fee_monthly_pct') else "—"
         )
@@ -232,7 +235,7 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
         div_min = g.get('dividend_fee_min', 0)
         div_max = g.get('dividend_fee_max', 0)
         if div_pct:
-            div_parts = [f"{div_pct * 100:.2f}%"]
+            div_parts = [f"{div_pct:.2f}%"]
             if div_min:
                 div_parts.append(f"min {_fmt_eur(div_min)}")
             if div_max:
