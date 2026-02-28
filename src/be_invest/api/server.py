@@ -1124,25 +1124,11 @@ def get_cost_comparison_tables(
             detail="No valid broker data found. Run /refresh-and-analyze first."
         )
 
-    # When force=True, re-extract fee rules + hidden costs from broker_cost_analyses.json
+    # When force=True, reload fee rules from disk and bypass the table cache.
+    # Fee rule extraction via LLM is the sole responsibility of /refresh-and-analyze.
     if force:
-        logger.info(f"force=True: Re-extracting fee rules from broker_cost_analyses.json using {model}")
-        try:
-            old_rules = dict(FEE_RULES)
-            new_rules = _extract_fee_rules_from_cost_data(cost_data, model)
-            if new_rules:
-                fee_rules_diff = get_rules_diff(old_rules, new_rules)
-                if fee_rules_diff:
-                    logger.info(f"Fee rules changed: {fee_rules_diff}")
-                # Merge new rules into existing (don't clear — preserves rules
-                # for any broker where extraction might have failed)
-                FEE_RULES.update(new_rules)
-                save_fee_rules(source="llm_extracted")
-                logger.info(f"Re-extracted {len(new_rules)} fee rules and hidden costs for {len(HIDDEN_COSTS)} brokers")
-            else:
-                logger.warning("Fee rule extraction returned no rules, using existing rules")
-        except Exception as e:
-            logger.warning(f"Fee rule re-extraction failed (using existing rules): {e}")
+        logger.info("force=True: Reloading fee rules from fee_rules.json (run /refresh-and-analyze to re-extract from PDFs)")
+        load_fee_rules()
 
     logger.info(f"Building deterministic fee tables for {len(broker_names)} brokers (lang={lang}): {', '.join(broker_names)}")
 
@@ -1920,6 +1906,29 @@ def _cleanup_stale_output_files(output_dir: Path) -> int:
     return removed
 
 
+def _warm_comparison_table_cache(broker_names: list, model: str) -> None:
+    """Build comparison tables deterministically and write to FileCache.
+
+    Called by /refresh-and-analyze after fee rules are saved so that the next
+    /cost-comparison-tables request is a cache hit and needs no further computation.
+    All work here is pure Python — no LLM calls.
+    """
+    result = build_comparison_tables(broker_names)
+
+    hidden_cost_notes = _build_localized_broker_notes("en")
+    notes = {_get_display_name(n): hidden_cost_notes.get(_get_display_name(n), "") for n in broker_names}
+    result["euronext_brussels"]["notes"] = notes
+
+    try:
+        result["persona_comparison"] = build_persona_comparison(broker_names)
+    except Exception as exc:
+        logger.warning(f"Persona comparison failed during cache warming: {exc}")
+
+    calc_cache_key = FileCache.make_key("cost_comparison_calculations", model)
+    llm_cache.set(calc_cache_key, result)
+    logger.info(f"🔥 Comparison table cache warmed for {len(broker_names)} brokers (key={calc_cache_key[:16]}…)")
+
+
 @app.get("/cost-analysis/{broker_name}")
 @time_api_call
 def get_broker_cost_analysis(broker_name: str) -> Dict[str, Any]:
@@ -2182,6 +2191,14 @@ Return ONLY a valid JSON object with structured fee data.
             logger.info(f"Saved {len(FEE_RULES)} fee rules and {len(HIDDEN_COSTS)} hidden cost entries")
     except Exception as e:
         logger.warning(f"Fee rule extraction failed (non-fatal): {e}")
+
+    # Warm the comparison table cache so /cost-comparison-tables returns immediately
+    try:
+        valid_brokers = [n for n in all_analyses if "error" not in all_analyses.get(n, {})]
+        if valid_brokers:
+            _warm_comparison_table_cache(valid_brokers, model)
+    except Exception as e:
+        logger.warning(f"Cache warming failed (non-fatal): {e}")
 
     # Return comprehensive results
     logger.info("=" * 80)
