@@ -56,6 +56,7 @@ class HiddenCosts:
     connectivity_fee_per_exchange_year: float = 0.0
     connectivity_fee_max_pct_account: float = 0.0
     subscription_fee_monthly: float = 0.0
+    subscription_plan_name: str = ""
     fx_fee_pct: float = 0.0
     handling_fee_per_trade: float = 0.0
     dividend_fee_pct: float = 0.0
@@ -258,6 +259,7 @@ def load_fee_rules(path: Optional[Path] = None) -> Dict[tuple, FeeRule]:
             connectivity_fee_per_exchange_year=costs_dict.get("connectivity_fee_per_exchange_year", 0.0),
             connectivity_fee_max_pct_account=costs_dict.get("connectivity_fee_max_pct_account", 0.0),
             subscription_fee_monthly=costs_dict.get("subscription_fee_monthly", 0.0),
+            subscription_plan_name=costs_dict.get("subscription_plan_name", ""),
             fx_fee_pct=costs_dict.get("fx_fee_pct", 0.0),
             handling_fee_per_trade=costs_dict.get("handling_fee_per_trade", 0.0),
             dividend_fee_pct=costs_dict.get("dividend_fee_pct", 0.0),
