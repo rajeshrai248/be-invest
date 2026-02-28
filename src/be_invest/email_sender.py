@@ -395,7 +395,7 @@ def build_email_html(tables_data: dict) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Belgian Investment Cost Digest</title>
+  <title>Weekly Brokerage Price Comparison</title>
   <style>{_STYLES}</style>
 </head>
 <body>
@@ -520,7 +520,7 @@ def build_and_send_report(recipients_override: list[str] | None = None) -> dict:
     html_body = build_email_html(tables)
 
     now = datetime.now(timezone.utc)
-    subject = f"Your Belgian Investment Cost Digest — {now.strftime('%d %b %Y')}"
+    subject = f"Weekly Brokerage Price Comparison — {now.strftime('%d %b %Y')}"
 
     send_email(subject, html_body, recipients)
 

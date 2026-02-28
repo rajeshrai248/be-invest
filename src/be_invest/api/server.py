@@ -431,8 +431,7 @@ _last_news_scrape_at: Optional[datetime] = None
 _news_scrape_in_progress = False
 
 _EMAIL_SCHEDULER_ENABLED = os.environ.get("EMAIL_SCHEDULER_ENABLED", "true").lower() == "true"
-_EMAIL_SEND_HOUR_UTC = int(os.environ.get("EMAIL_SEND_HOUR_UTC", "8"))  # send at 08:00 UTC by default
-_EMAIL_SEND_DAYS = (5, 15)  # fixed calendar days each month
+_EMAIL_SEND_HOUR_UTC = int(os.environ.get("EMAIL_SEND_HOUR_UTC", "9"))  # send at 09:00 UTC (≈ 10:00 CET) every Monday
 _email_scheduler_timer: Optional[threading.Timer] = None
 _last_email_sent_at: Optional[datetime] = None
 _email_send_in_progress = False
@@ -531,24 +530,17 @@ def _run_scheduled_news_scrape() -> None:
 
 
 def _next_email_send_time() -> datetime:
-    """Return the next scheduled send datetime (5th or 15th of the month at EMAIL_SEND_HOUR_UTC)."""
+    """Return the next Monday at EMAIL_SEND_HOUR_UTC:00 UTC."""
     now = datetime.now(timezone.utc)
-    # Search across enough months to always find the next candidate
-    candidates = []
-    for month_offset in range(3):
-        year = now.year
-        month = now.month + month_offset
-        while month > 12:
-            month -= 12
-            year += 1
-        for day in _EMAIL_SEND_DAYS:
-            try:
-                candidate = datetime(year, month, day, _EMAIL_SEND_HOUR_UTC, 0, 0, tzinfo=timezone.utc)
-                if candidate > now:
-                    candidates.append(candidate)
-            except ValueError:
-                pass  # invalid date (e.g., Feb 30) — skip
-    return min(candidates)
+    # Monday = weekday 0; calculate days until the next Monday
+    days_ahead = (0 - now.weekday()) % 7
+    if days_ahead == 0 and now.hour >= _EMAIL_SEND_HOUR_UTC:
+        # It's Monday but we've already passed the send time — schedule for next Monday
+        days_ahead = 7
+    next_monday = (now + timedelta(days=days_ahead)).replace(
+        hour=_EMAIL_SEND_HOUR_UTC, minute=0, second=0, microsecond=0
+    )
+    return next_monday
 
 
 def _schedule_next_email() -> None:
@@ -3098,7 +3090,7 @@ def _start_news_scrape_scheduler():
 
     if _EMAIL_SCHEDULER_ENABLED:
         logger.info(
-            f"📧 Email report scheduler enabled — sends on the 5th and 15th of each month "
+            f"📧 Email report scheduler enabled — sends every Monday "
             f"at {_EMAIL_SEND_HOUR_UTC:02d}:00 UTC"
         )
         _schedule_next_email()
