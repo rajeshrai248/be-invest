@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from google import genai
 from google.genai import types
@@ -32,6 +32,167 @@ except Exception as e:
     logger.warning(f"Could not initialize Langfuse client for evaluations: {e}")
 
 JUDGE_MODEL = "gemini-2.5-pro"
+
+# Human evaluation queue — set up once and cached here
+_QUEUE_NAME = "business-analyst-review"
+_human_eval_queue_id: Optional[str] = None  # cached after first setup
+
+# Score config definitions for human evaluation
+_HUMAN_SCORE_CONFIGS = [
+    {
+        "name": "human_accuracy",
+        "data_type": "NUMERIC",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "description": "Human review: Are the fee figures factually correct? 0 = incorrect, 1 = fully correct.",
+    },
+    {
+        "name": "human_clarity",
+        "data_type": "NUMERIC",
+        "min_value": 1.0,
+        "max_value": 5.0,
+        "description": "Human review: Is the response clear and understandable to a non-technical user? 1 = very unclear, 5 = very clear.",
+    },
+    {
+        "name": "human_completeness",
+        "data_type": "NUMERIC",
+        "min_value": 1.0,
+        "max_value": 5.0,
+        "description": "Human review: Does the response cover all relevant brokers and instruments? 1 = very incomplete, 5 = very complete.",
+    },
+    {
+        "name": "human_approval",
+        "data_type": "CATEGORICAL",
+        "categories": [
+            {"label": "Approved", "value": 1},
+            {"label": "Rejected", "value": 0},
+        ],
+        "description": "Human review: Overall approval decision. Approved = response is suitable to show to end users.",
+    },
+]
+
+
+def _setup_human_evaluation() -> Optional[str]:
+    """
+    Idempotent setup of score configs and annotation queue for human evaluation.
+    Creates configs and queue only if they do not already exist.
+    Returns the queue ID, or None if Langfuse is unavailable.
+    """
+    global _human_eval_queue_id
+
+    if _human_eval_queue_id:
+        return _human_eval_queue_id
+
+    if not _langfuse_client:
+        return None
+
+    try:
+        api = _langfuse_client.api
+
+        # ── 1. Resolve score configs (create missing ones) ─────────────────
+        existing_configs_resp = api.score_configs.get(limit=100)
+        existing_names: Dict[str, str] = {
+            cfg.name: cfg.id for cfg in (existing_configs_resp.data or [])
+        }
+
+        config_ids: List[str] = []
+        for cfg_def in _HUMAN_SCORE_CONFIGS:
+            if cfg_def["name"] in existing_names:
+                config_ids.append(existing_names[cfg_def["name"]])
+                logger.debug(f"Score config '{cfg_def['name']}' already exists — reusing")
+            else:
+                from langfuse.api.resources.score_configs.types.create_score_config_request import (
+                    CreateScoreConfigRequest,
+                )
+                from langfuse.api.resources.commons.types.score_config_data_type import (
+                    ScoreConfigDataType,
+                )
+
+                kwargs: Dict[str, Any] = {
+                    "name": cfg_def["name"],
+                    "data_type": ScoreConfigDataType(cfg_def["data_type"]),
+                    "description": cfg_def.get("description"),
+                }
+                if "min_value" in cfg_def:
+                    kwargs["min_value"] = cfg_def["min_value"]
+                if "max_value" in cfg_def:
+                    kwargs["max_value"] = cfg_def["max_value"]
+                if "categories" in cfg_def:
+                    from langfuse.api.resources.commons.types.config_category import ConfigCategory
+                    kwargs["categories"] = [
+                        ConfigCategory(label=c["label"], value=c["value"])
+                        for c in cfg_def["categories"]
+                    ]
+
+                created = api.score_configs.create(request=CreateScoreConfigRequest(**kwargs))
+                config_ids.append(created.id)
+                logger.info(f"Created score config '{cfg_def['name']}' (id={created.id})")
+
+        # ── 2. Resolve annotation queue (create if missing) ────────────────
+        existing_queues_resp = api.annotation_queues.list_queues(limit=100)
+        existing_queue = next(
+            (q for q in (existing_queues_resp.data or []) if q.name == _QUEUE_NAME),
+            None,
+        )
+
+        if existing_queue:
+            _human_eval_queue_id = existing_queue.id
+            logger.info(f"Annotation queue '{_QUEUE_NAME}' already exists — reusing (id={_human_eval_queue_id})")
+        else:
+            from langfuse.api.resources.annotation_queues.types.create_annotation_queue_request import (
+                CreateAnnotationQueueRequest,
+            )
+            created_queue = api.annotation_queues.create_queue(
+                request=CreateAnnotationQueueRequest(
+                    name=_QUEUE_NAME,
+                    description=(
+                        "Business analyst review queue. "
+                        "Score each trace on accuracy, clarity, completeness, and approval."
+                    ),
+                    score_config_ids=config_ids,
+                )
+            )
+            _human_eval_queue_id = created_queue.id
+            logger.info(f"Created annotation queue '{_QUEUE_NAME}' (id={_human_eval_queue_id})")
+
+        return _human_eval_queue_id
+
+    except Exception as exc:
+        logger.warning(f"⚠️ Could not set up human evaluation queue: {exc}")
+        return None
+
+
+def add_trace_to_review_queue(trace_id: str) -> None:
+    """
+    Add a trace to the business-analyst-review annotation queue.
+    Runs the setup idempotently on first call.
+    """
+    if not _langfuse_client or not trace_id:
+        return
+
+    try:
+        queue_id = _setup_human_evaluation()
+        if not queue_id:
+            return
+
+        from langfuse.api.resources.annotation_queues.types.create_annotation_queue_item_request import (
+            CreateAnnotationQueueItemRequest,
+        )
+        from langfuse.api.resources.annotation_queues.types.annotation_queue_object_type import (
+            AnnotationQueueObjectType,
+        )
+
+        _langfuse_client.api.annotation_queues.create_queue_item(
+            queue_id=queue_id,
+            request=CreateAnnotationQueueItemRequest(
+                object_id=trace_id,
+                object_type=AnnotationQueueObjectType.TRACE,
+            ),
+        )
+        logger.info(f"✅ Trace {trace_id} added to '{_QUEUE_NAME}' for human review")
+
+    except Exception as exc:
+        logger.warning(f"⚠️ Could not add trace {trace_id} to review queue: {exc}")
 
 
 def get_judge_prompt_for_endpoint(
@@ -241,6 +402,7 @@ def submit_evaluation_to_langfuse(
 ) -> None:
     """
     Evaluate groundedness and submit results to Langfuse evaluation table.
+    Also adds the trace to the human review annotation queue.
     Runs asynchronously in a background thread.
     """
     try:
@@ -265,6 +427,10 @@ def submit_evaluation_to_langfuse(
                         logger.info(f"✅ Evaluation submitted to Langfuse for {endpoint}")
                 else:
                     logger.warning(f"⚠️ Groundedness evaluation returned no result for {endpoint}")
+
+                # Queue trace for human review regardless of LLM judge outcome
+                if trace_id:
+                    add_trace_to_review_queue(trace_id)
 
             except Exception as e:
                 logger.warning(f"⚠️ Evaluation submission error: {e}")

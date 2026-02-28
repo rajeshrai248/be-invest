@@ -18,7 +18,7 @@ from typing import Optional, Dict, List
 
 logger = logging.getLogger(__name__)
 
-TRANSACTION_SIZES = [250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000]
+TRANSACTION_SIZES = [50, 100, 250, 500, 1000, 1500, 2000, 2500, 5000, 10000, 50000]
 ASSET_TYPES = ["stocks", "etfs", "bonds"]
 
 
@@ -438,6 +438,63 @@ def generate_explanation(broker: str, instrument: str, amount: float) -> str:
     return f"Fee: EUR{expected:.2f}"
 
 
+def generate_methodology(broker: str, instrument: str) -> str:
+    """Generate a concise fee formula description for a broker/instrument.
+
+    Returns a one-line summary of the fee structure (not a per-amount calculation).
+    Used for static methodology reference in email reports.
+    """
+    _ensure_rules_loaded()
+    key = (_normalize_broker(broker), _normalize_instrument(instrument))
+    rule = FEE_RULES.get(key)
+    if rule is None:
+        return ""
+
+    tiers = rule.tiers
+
+    # Simple flat
+    if len(tiers) == 1 and "flat" in tiers[0]:
+        parts = [f"Flat fee: \u20ac{tiers[0]['flat']:.2f}"]
+        if rule.handling_fee > 0:
+            parts.append(f"+ \u20ac{rule.handling_fee:.2f} handling/trade")
+        return " ".join(parts)
+
+    # Percentage with min
+    if len(tiers) == 1 and "rate" in tiers[0]:
+        rate_pct = tiers[0]["rate"] * 100
+        desc = f"{rate_pct:.2f}% \u00d7 order amount"
+        min_f = tiers[0].get("min_fee", 0.0)
+        if min_f:
+            desc += f" (min \u20ac{min_f:.2f})"
+        return desc
+
+    # Base + slice
+    if len(tiers) == 1 and "base_up_to" in tiers[0]:
+        tier = tiers[0]
+        return (
+            f"\u20ac{tier['base_fee']:.2f} base (\u2264\u20ac{tier['base_up_to']:,.0f}), "
+            f"then +\u20ac{tier['slice_fee']:.2f} per started \u20ac{tier['per_slice']:,} slice"
+        )
+
+    # Tiered flat + optional slice
+    flat_tiers = sorted([t for t in tiers if "up_to" in t], key=lambda t: t["up_to"])
+    slice_tiers = [t for t in tiers if "per_slice" in t and "up_to" not in t]
+
+    tier_parts = []
+    for tier in flat_tiers:
+        tier_parts.append(f"\u20ac{tier['fee']:.2f} (\u2264\u20ac{tier['up_to']:,.0f})")
+
+    if slice_tiers:
+        st = slice_tiers[0]
+        slice_desc = f"then \u20ac{st['fee']:.2f} per started \u20ac{st['per_slice']:,} slice"
+        effective_max = st.get("max_fee") or rule.max_fee
+        if effective_max:
+            slice_desc += f" (max \u20ac{effective_max:.2f})"
+        tier_parts.append(slice_desc)
+
+    return ", ".join(tier_parts) if tier_parts else "Custom fee structure"
+
+
 # ========================================================================================
 # COMPARISON TABLE BUILDER
 # ========================================================================================
@@ -471,10 +528,12 @@ def build_comparison_tables(broker_names: List[str]) -> dict:
     etfs = {}
     bonds = {}
     calculation_logic = {}
+    methodology = {}
 
     for broker in broker_names:
         display = _get_display_name(broker)
         calc_broker = {}
+        meth_broker = {}
 
         for asset_type, target_dict in [("stocks", stocks), ("etfs", etfs), ("bonds", bonds)]:
             fees = {}
@@ -490,9 +549,14 @@ def build_comparison_tables(broker_names: List[str]) -> dict:
             if fees:
                 target_dict[display] = fees
                 calc_broker[asset_type] = calc_asset
+                meth = generate_methodology(broker, asset_type)
+                if meth:
+                    meth_broker[asset_type] = meth
 
         if calc_broker:
             calculation_logic[display] = calc_broker
+        if meth_broker:
+            methodology[display] = meth_broker
 
     return {
         "euronext_brussels": {
@@ -500,6 +564,7 @@ def build_comparison_tables(broker_names: List[str]) -> dict:
             "etfs": etfs,
             "bonds": bonds,
             "calculation_logic": calculation_logic,
+            "methodology": methodology,
             "notes": {},
         }
     }

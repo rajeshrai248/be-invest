@@ -431,8 +431,7 @@ _last_news_scrape_at: Optional[datetime] = None
 _news_scrape_in_progress = False
 
 _EMAIL_SCHEDULER_ENABLED = os.environ.get("EMAIL_SCHEDULER_ENABLED", "true").lower() == "true"
-_EMAIL_SEND_HOUR_UTC = int(os.environ.get("EMAIL_SEND_HOUR_UTC", "8"))  # send at 08:00 UTC by default
-_EMAIL_SEND_DAYS = (5, 15)  # fixed calendar days each month
+_EMAIL_SEND_HOUR_UTC = int(os.environ.get("EMAIL_SEND_HOUR_UTC", "9"))  # send at 09:00 UTC (≈ 10:00 CET) every Monday
 _email_scheduler_timer: Optional[threading.Timer] = None
 _last_email_sent_at: Optional[datetime] = None
 _email_send_in_progress = False
@@ -531,24 +530,17 @@ def _run_scheduled_news_scrape() -> None:
 
 
 def _next_email_send_time() -> datetime:
-    """Return the next scheduled send datetime (5th or 15th of the month at EMAIL_SEND_HOUR_UTC)."""
+    """Return the next Monday at EMAIL_SEND_HOUR_UTC:00 UTC."""
     now = datetime.now(timezone.utc)
-    # Search across enough months to always find the next candidate
-    candidates = []
-    for month_offset in range(3):
-        year = now.year
-        month = now.month + month_offset
-        while month > 12:
-            month -= 12
-            year += 1
-        for day in _EMAIL_SEND_DAYS:
-            try:
-                candidate = datetime(year, month, day, _EMAIL_SEND_HOUR_UTC, 0, 0, tzinfo=timezone.utc)
-                if candidate > now:
-                    candidates.append(candidate)
-            except ValueError:
-                pass  # invalid date (e.g., Feb 30) — skip
-    return min(candidates)
+    # Monday = weekday 0; calculate days until the next Monday
+    days_ahead = (0 - now.weekday()) % 7
+    if days_ahead == 0 and now.hour >= _EMAIL_SEND_HOUR_UTC:
+        # It's Monday but we've already passed the send time — schedule for next Monday
+        days_ahead = 7
+    next_monday = (now + timedelta(days=days_ahead)).replace(
+        hour=_EMAIL_SEND_HOUR_UTC, minute=0, second=0, microsecond=0
+    )
+    return next_monday
 
 
 def _schedule_next_email() -> None:
@@ -610,7 +602,7 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
     Unified LLM caller supporting both OpenAI (gpt-*) and Anthropic (claude-*) models.
 
     Args:
-        model: Model name (e.g., "gpt-4o", "claude-sonnet-4-20250514")
+        model: Model name (e.g., "gpt-4o", "claude-sonnet-4-6")
         system_prompt: System message content
         user_prompt: User message content
         response_format: "json" for JSON mode, "text" for regular text
@@ -793,7 +785,7 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
 
                 response = client.messages.create(
                     model=model,
-                    max_tokens=4096,
+                    max_tokens=8192,
                     temperature=effective_temperature,
                     system=system_prompt,
                     messages=api_messages,
@@ -1079,7 +1071,7 @@ def get_cost_analysis() -> Dict[str, Any]:
 @observe(name="cost-comparison-tables")
 def get_cost_comparison_tables(
         request: Request,
-        model: str = Query("claude-sonnet-4-20250514", description="LLM to use for notes generation"),
+        model: str = Query("claude-sonnet-4-6", description="LLM to use for notes generation"),
         force: bool = Query(False, description="Force fresh generation, ignore cache"),
         lang: str = Query("en", description="Response language: en, fr-be, nl-be")
 ) -> Dict[str, Any]:
@@ -1124,25 +1116,11 @@ def get_cost_comparison_tables(
             detail="No valid broker data found. Run /refresh-and-analyze first."
         )
 
-    # When force=True, re-extract fee rules + hidden costs from broker_cost_analyses.json
+    # When force=True, reload fee rules from disk and bypass the table cache.
+    # Fee rule extraction via LLM is the sole responsibility of /refresh-and-analyze.
     if force:
-        logger.info(f"force=True: Re-extracting fee rules from broker_cost_analyses.json using {model}")
-        try:
-            old_rules = dict(FEE_RULES)
-            new_rules = _extract_fee_rules_from_cost_data(cost_data, model)
-            if new_rules:
-                fee_rules_diff = get_rules_diff(old_rules, new_rules)
-                if fee_rules_diff:
-                    logger.info(f"Fee rules changed: {fee_rules_diff}")
-                # Merge new rules into existing (don't clear — preserves rules
-                # for any broker where extraction might have failed)
-                FEE_RULES.update(new_rules)
-                save_fee_rules(source="llm_extracted")
-                logger.info(f"Re-extracted {len(new_rules)} fee rules and hidden costs for {len(HIDDEN_COSTS)} brokers")
-            else:
-                logger.warning("Fee rule extraction returned no rules, using existing rules")
-        except Exception as e:
-            logger.warning(f"Fee rule re-extraction failed (using existing rules): {e}")
+        logger.info("force=True: Reloading fee rules from fee_rules.json (run /refresh-and-analyze to re-extract from PDFs)")
+        load_fee_rules()
 
     logger.info(f"Building deterministic fee tables for {len(broker_names)} brokers (lang={lang}): {', '.join(broker_names)}")
 
@@ -1412,7 +1390,7 @@ def _localize_cost_comparison_response(result: Dict[str, Any], lang: str) -> Dic
 @observe(name="financial-analysis")
 def generate_financial_analysis(
         request: Request,
-        model: str = Query("claude-sonnet-4-20250514", description="LLM to use: claude-sonnet-4-20250514 (default), gpt-4o"),
+        model: str = Query("claude-sonnet-4-6", description="LLM to use: claude-sonnet-4-6 (default), gpt-4o"),
         force: bool = Query(False, description="Force fresh generation, ignore cache"),
         lang: str = Query("en", description="Response language: en, fr-be, nl-be")
 ) -> Dict[str, Any]:
@@ -1890,6 +1868,59 @@ def _clear_pdf_text_dir(directory: Path, keep: Optional[List[str]] = None) -> No
         logger.error(f"❌ Error clearing PDF text directory: {exc}")
 
 
+def _cleanup_stale_output_files(output_dir: Path) -> int:
+    """Delete accumulated financial_analysis_*.json files from the output directory.
+
+    Called at the start of /refresh-and-analyze so stale snapshots from previous
+    runs don't accumulate indefinitely.  Other output files (broker_cost_analyses.json,
+    fee_rules.json, cost_comparison_tables.json) are overwritten in-place each run
+    and are therefore excluded from cleanup.
+
+    Returns the number of files removed.
+    """
+    if not output_dir.exists():
+        return 0
+
+    removed = 0
+    for path in output_dir.glob("financial_analysis_*.json"):
+        try:
+            path.unlink()
+            logger.info(f"🗑️  Removed stale file: {path.name}")
+            removed += 1
+        except Exception as exc:
+            logger.warning(f"⚠️  Could not remove {path.name}: {exc}")
+
+    if removed:
+        logger.info(f"✅ Cleaned up {removed} stale financial_analysis file(s)")
+    else:
+        logger.info("📂 No stale financial_analysis files to clean up")
+
+    return removed
+
+
+def _warm_comparison_table_cache(broker_names: list, model: str) -> None:
+    """Build comparison tables deterministically and write to FileCache.
+
+    Called by /refresh-and-analyze after fee rules are saved so that the next
+    /cost-comparison-tables request is a cache hit and needs no further computation.
+    All work here is pure Python — no LLM calls.
+    """
+    result = build_comparison_tables(broker_names)
+
+    hidden_cost_notes = _build_localized_broker_notes("en")
+    notes = {_get_display_name(n): hidden_cost_notes.get(_get_display_name(n), "") for n in broker_names}
+    result["euronext_brussels"]["notes"] = notes
+
+    try:
+        result["persona_comparison"] = build_persona_comparison(broker_names)
+    except Exception as exc:
+        logger.warning(f"Persona comparison failed during cache warming: {exc}")
+
+    calc_cache_key = FileCache.make_key("cost_comparison_calculations", model)
+    llm_cache.set(calc_cache_key, result)
+    logger.info(f"🔥 Comparison table cache warmed for {len(broker_names)} brokers (key={calc_cache_key[:16]}…)")
+
+
 @app.get("/cost-analysis/{broker_name}")
 @time_api_call
 def get_broker_cost_analysis(broker_name: str) -> Dict[str, Any]:
@@ -1951,7 +1982,7 @@ def refresh_and_analyze(
         brokers_to_process: Optional[List[str]] = Query(None,
                                                         description="Specific brokers to analyze (if None, analyzes all)"),
         force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
-        model: str = Query("claude-sonnet-4-20250514", description="LLM model: claude-sonnet-4-20250514 (default), gpt-4o, etc."),
+        model: str = Query("claude-sonnet-4-6", description="LLM model: claude-sonnet-4-6 (default), gpt-4o, etc."),
 ) -> Dict[str, Any]:
     """
     Refresh PDFs, extract text, and generate comprehensive cost analysis.
@@ -1992,11 +2023,14 @@ def refresh_and_analyze(
 
     logger.info(f"📋 Processing {len(brokers_list)} broker(s): {', '.join(b.name for b in brokers_list)}")
 
-    # Step 2: Clear old PDF text files and prepare output directory
+    # Step 2: Clear old PDF text files and stale output snapshots
     output_dir = _default_pdf_text_dir()
 
     logger.info("🧹 Clearing old PDF text files...")
     _clear_pdf_text_dir(output_dir, keep=[".gitkeep"])
+
+    logger.info("🧹 Cleaning up stale financial_analysis snapshot files...")
+    _cleanup_stale_output_files(_default_output_dir())
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2150,6 +2184,14 @@ Return ONLY a valid JSON object with structured fee data.
     except Exception as e:
         logger.warning(f"Fee rule extraction failed (non-fatal): {e}")
 
+    # Warm the comparison table cache so /cost-comparison-tables returns immediately
+    try:
+        valid_brokers = [n for n in all_analyses if "error" not in all_analyses.get(n, {})]
+        if valid_brokers:
+            _warm_comparison_table_cache(valid_brokers, model)
+    except Exception as e:
+        logger.warning(f"Cache warming failed (non-fatal): {e}")
+
     # Return comprehensive results
     logger.info("=" * 80)
     logger.info("REFRESH AND ANALYZE COMPLETE")
@@ -2256,6 +2298,24 @@ TIER TYPES:
 - {{"per_slice": 10000, "fee": 15.00}} - per-started-slice (no up_to means it applies after all flat tiers)
 - {{"per_slice": 10000, "fee": 15.00, "max_fee": 50.00}} - per-slice with fee cap
 - {{"rate": 0.0035, "min_fee": 1.00}} - percentage rate with minimum
+
+CRITICAL — TWO DIFFERENT NUMERIC CONVENTIONS ARE USED IN THE SAME JSON:
+
+1. TIER "rate" fields (inside the "tiers" array) use DECIMAL FRACTIONS:
+   The calculator does: fee = amount * rate — so rate must be a decimal fraction.
+   - rate: 0.0035 means 0.35% commission
+   - rate: 0.0025 means 0.25% commission
+   - rate: 0.005  means 0.50% commission
+   - WRONG: rate=0.35 for a 0.35% fee. RIGHT: rate=0.0035 for a 0.35% fee.
+   - WRONG: rate=0.25 for a 0.25% fee. RIGHT: rate=0.0025 for a 0.25% fee.
+
+2. "_pct" fields in "hidden_costs" use PERCENTAGE NOTATION (NOT decimal fractions):
+   - fx_fee_pct: 0.25 means 0.25%, NOT 25%. A value of 1.0 means 1%. A value of 1.40 means 1.40%.
+   - custody_fee_monthly_pct: 0.0242 means 0.0242% per month. A value of 2.0 means 2% per month.
+   - dividend_fee_pct: 2.42 means 2.42%. A value of 2.0 means 2%. Do NOT write 0.02 to mean 2%.
+   - connectivity_fee_max_pct_account follows the same rule.
+   - WRONG: dividend_fee_pct=0.02 for a 2% fee. RIGHT: dividend_fee_pct=2.0 for a 2% fee.
+   - WRONG: fx_fee_pct=0.0025 for a 0.25% fee. RIGHT: fx_fee_pct=0.25 for a 0.25% fee.
 
 IMPORTANT:
 - Extract ALL tiers from the data. Many brokers have 4-5 tiers, not just 2.
@@ -3030,7 +3090,7 @@ def _start_news_scrape_scheduler():
 
     if _EMAIL_SCHEDULER_ENABLED:
         logger.info(
-            f"📧 Email report scheduler enabled — sends on the 5th and 15th of each month "
+            f"📧 Email report scheduler enabled — sends every Monday "
             f"at {_EMAIL_SEND_HOUR_UTC:02d}:00 UTC"
         )
         _schedule_next_email()

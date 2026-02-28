@@ -4,6 +4,7 @@ Sends bi-weekly HTML email reports containing cost comparison tables and
 investor persona TCO rankings. Uses Gmail SMTP via stdlib smtplib only.
 """
 
+import html
 import logging
 import os
 import smtplib
@@ -37,21 +38,20 @@ def _get_recipients() -> list[str]:
 
 _STYLES = """
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; color: #111827; margin: 0; padding: 24px 0; background: #f3f4f6; }
-    .wrapper { max-width: 700px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
-    .header { background: #e87722; color: #fff; padding: 36px 40px; }
-    .header-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.8; margin: 0 0 10px; }
-    .header h1 { margin: 0 0 8px; font-size: 26px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.2; }
+    .wrapper { max-width: 700px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 16px rgba(0,0,0,0.06); }
+    .header { background: #FF6200; color: #fff; padding: 24px 40px; }
+    .header-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.85; margin: 0 0 6px; }
     .header p { margin: 0; font-size: 13px; opacity: 0.85; }
     .content { padding: 36px 40px; }
     p { word-wrap: break-word; overflow-wrap: break-word; max-width: 100%; margin: 0 0 16px; }
     em { word-wrap: break-word; overflow-wrap: break-word; }
     .intro { font-size: 14px; color: #374151; line-height: 1.75; margin-bottom: 32px; padding-bottom: 28px; border-bottom: 1px solid #e5e7eb; }
-    .section-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #e87722; margin: 36px 0 4px; }
+    .section-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #FF6200; margin: 36px 0 4px; }
     h2 { font-size: 20px; font-weight: 700; color: #111827; margin: 0 0 16px; }
     h3 { color: #111827; font-size: 14px; font-weight: 700; margin: 0 0 12px; }
     .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 6px; }
     table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 13px; }
-    th { background: #111827; color: #fff; padding: 11px 14px; text-align: right; font-weight: 600; font-size: 12px; }
+    th { background: #FF6200; color: #fff; padding: 11px 14px; text-align: right; font-weight: 600; font-size: 12px; }
     th:first-child { text-align: left; }
     td { padding: 10px 14px; border-bottom: 1px solid #f0f2f5; text-align: right; color: #374151; }
     td:first-child { text-align: left; font-weight: 600; color: #111827; }
@@ -61,15 +61,14 @@ _STYLES = """
     .rank-1 td { background: #fff7ed !important; }
     .rank-2 td { background: #f9fafb; }
     .table-note { font-size: 12px; color: #6b7280; margin: 0 0 24px; line-height: 1.6; }
-    .footnotes { font-size: 11px; color: #6b7280; margin: 10px 0 28px; padding: 14px 16px; background: #f9fafb; border-left: 3px solid #e5e7eb; line-height: 1.9; border-radius: 0 4px 4px 0; }
+    .footnotes { font-size: 11px; color: #6b7280; margin: 10px 0 28px; padding: 14px 16px; background: #f9fafb; border-left: 3px solid #FF6200; line-height: 1.9; border-radius: 0 4px 4px 0; }
     .footnotes strong { color: #374151; }
     .divider { border: none; border-top: 1px solid #e5e7eb; margin: 36px 0; }
     .footer { background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 24px 40px; font-size: 11px; color: #9ca3af; text-align: center; line-height: 1.9; }
-    .footer a { color: #e87722; text-decoration: none; font-weight: 600; }
+    .footer a { color: #FF6200; text-decoration: none; font-weight: 600; }
     @media only screen and (max-width: 620px) {
         .wrapper { border-radius: 0 !important; }
-        .header { padding: 24px 16px !important; }
-        .header h1 { font-size: 20px !important; }
+        .header { padding: 16px !important; }
         .content { padding: 20px 16px !important; }
         .footer { padding: 16px !important; }
         table { min-width: 0 !important; }
@@ -133,7 +132,9 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
             mob = amt in mobile_hidden
             val = fees.get(amt)
             tooltip = broker_logic.get(amt, "")
-            t = f' title="{tooltip}"' if tooltip else ""
+            # title on <td> works in Gmail/web browsers; Outlook ignores it
+            # (methodology section below provides the same info for all clients)
+            t = f' title="{html.escape(tooltip)}"' if tooltip else ""
             if val is None:
                 cells.append('<td class="hide-mob">—</td>' if mob else "<td>—</td>")
             elif val == min_per_col[amt]:
@@ -152,13 +153,50 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
 
 
 def _fmt_pct(val: float, suffix: str = "") -> str:
-    """Format a percentage value, returning '—' if zero."""
-    return f"{val * 100:.2f}%{suffix}" if val else "—"
+    """Format a percentage value, returning '—' if zero.
+
+    Values in fee_rules.json are stored as percentages (e.g. 0.25 means 0.25%).
+    """
+    return f"{val:.2f}%{suffix}" if val else "—"
 
 
 def _fmt_eur(val: float, suffix: str = "") -> str:
     """Format a EUR value, returning '—' if zero."""
     return f"€{val:.2f}{suffix}" if val else "—"
+
+
+def _render_methodology_block(methodology: dict, asset_type: str) -> str:
+    """Render fee formulas as an Outlook-only footnote block.
+
+    Wrapped in MSO conditional comments so only Outlook renders it.
+    Gmail/web users get tooltips via title attributes instead.
+
+    Args:
+        methodology: {broker_name: {asset_type: "formula description", ...}, ...}
+        asset_type: "stocks" or "etfs"
+    """
+    entries = {
+        broker: meth[asset_type]
+        for broker, meth in sorted(methodology.items())
+        if asset_type in meth
+    }
+    if not entries:
+        return ""
+
+    lines = "".join(
+        f"<strong>{html.escape(broker)}:</strong> {html.escape(formula)}<br>"
+        for broker, formula in entries.items()
+    )
+    return (
+        "<!--[if mso]>"
+        '<div style="font-size:11px;color:#6b7280;margin:6px 0 20px;'
+        "padding:12px 16px;background:#f9fafb;border-left:3px solid #FF6200;"
+        'line-height:1.9;">'
+        '<strong style="color:#374151;">How fees are calculated</strong><br>'
+        f"{lines}"
+        "</div>"
+        "<![endif]-->"
+    )
 
 
 def _render_hidden_costs_table(hidden_costs: dict) -> str:
@@ -208,7 +246,7 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
         g = c if isinstance(c, dict) else c.__dict__
 
         custody = (
-            f"{g.get('custody_fee_monthly_pct', 0) * 100:.3f}%/mo"
+            f"{g.get('custody_fee_monthly_pct', 0):.4f}%/mo"
             + (f" (min {_fmt_eur(g.get('custody_fee_monthly_min', 0))})" if g.get('custody_fee_monthly_min') else "")
             if g.get('custody_fee_monthly_pct') else "—"
         )
@@ -232,7 +270,7 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
         div_min = g.get('dividend_fee_min', 0)
         div_max = g.get('dividend_fee_max', 0)
         if div_pct:
-            div_parts = [f"{div_pct * 100:.2f}%"]
+            div_parts = [f"{div_pct:.2f}%"]
             if div_min:
                 div_parts.append(f"min {_fmt_eur(div_min)}")
             if div_max:
@@ -242,7 +280,7 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
             dividend = "—"
 
         notes = g.get('notes', '')
-        row_title = f' title="{notes}"' if notes else ""
+        row_title = f' title="{html.escape(notes)}"' if notes else ""
         cells = "".join(
             f'<td class="hide-mob">{v}</td>' if col_idx in _COST_MOB_HIDDEN else f"<td>{v}</td>"
             for col_idx, v in enumerate([custody, connectivity, subscription, fx, handling, dividend])
@@ -348,11 +386,12 @@ def build_email_html(tables_data: dict) -> str:
     """
     now_str = datetime.now(timezone.utc).strftime("%d %B %Y at %H:%M UTC")
 
-    # Extract fee tables and calculation logic (merge across markets if multiple)
+    # Extract fee tables, calculation logic, and methodology (merge across markets)
     all_stocks: dict = {}
     all_etfs: dict = {}
     stocks_logic: dict = {}
     etfs_logic: dict = {}
+    all_methodology: dict = {}
     for _market, market_data in tables_data.items():
         if not isinstance(market_data, dict):
             continue
@@ -361,6 +400,8 @@ def build_email_html(tables_data: dict) -> str:
         for broker, asset_logic in market_data.get("calculation_logic", {}).items():
             stocks_logic.setdefault(broker, {}).update(asset_logic.get("stocks", {}))
             etfs_logic.setdefault(broker, {}).update(asset_logic.get("etfs", {}))
+        for broker, meth in market_data.get("methodology", {}).items():
+            all_methodology.setdefault(broker, {}).update(meth)
 
     hidden_costs = tables_data.get("hidden_costs", {})
 
@@ -369,21 +410,21 @@ def build_email_html(tables_data: dict) -> str:
         "padding:2px 8px;border-radius:10px;font-size:11px;'>Green</span>"
     )
     fee_section = (
-        '<p class="section-eyebrow">Transaction Fees by Investment Amount</p>'
-        "<h2>Per-Trade Cost Comparison</h2>"
+        '<h2>Transaction Fees by Investment Amount</h2>'
         f'<p class="table-note">All amounts in EUR. Fees are deterministic and rule-based. '
-        f"{cheapest_badge} = cheapest broker for that amount. "
-        "Hover any cell (desktop) to see the full calculation.</p>"
+        f"{cheapest_badge} = cheapest broker for that amount.</p>"
         + _render_fee_table(
-            "Stocks — Euronext Brussels, Amsterdam & Paris",
+            "Stocks \u2014 Euronext Brussels, Amsterdam & Paris",
             all_stocks,
             stocks_logic,
         )
+        + _render_methodology_block(all_methodology, "stocks")
         + _render_fee_table(
-            "ETFs — Euronext Brussels, Amsterdam & Paris",
+            "ETFs \u2014 Euronext Brussels, Amsterdam & Paris",
             all_etfs,
             etfs_logic,
         )
+        + _render_methodology_block(all_methodology, "etfs")
         + _render_hidden_costs_table(hidden_costs)
     )
 
@@ -392,21 +433,24 @@ def build_email_html(tables_data: dict) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Belgian Investment Cost Digest</title>
+  <title>Weekly Brokerage Price Comparison</title>
   <style>{_STYLES}</style>
 </head>
 <body>
 <div class="wrapper">
   <div class="header">
-    <p class="header-eyebrow">Belgian Broker Fee Report</p>
-    <h1>Your Investment Cost Digest</h1>
+    <p class="header-eyebrow">Broker Pricing Monitor · Belgium</p>
     <p>{now_str}</p>
   </div>
   <div class="content">
     <p class="intro">
-      Knowing what you pay in broker fees can make a significant difference to your
-      long-term investment returns. This digest compares transaction costs and ongoing
-      charges across Belgian retail brokers so you can make informed, cost-efficient decisions.
+      This weekly digest provides a structured, data-driven comparison of transaction fees
+      and total cost of ownership (TCO) across Belgian retail brokers. All figures are
+      computed deterministically from published tariff schedules, ensuring full
+      reproducibility and auditability for research purposes.<br><br>
+      Use this report to benchmark competitive fee positioning, detect pricing shifts
+      between brokers, and support your analysis of retail investment cost structures
+      in the Belgian brokerage market.
     </p>
     {fee_section}
   </div>
@@ -517,7 +561,7 @@ def build_and_send_report(recipients_override: list[str] | None = None) -> dict:
     html_body = build_email_html(tables)
 
     now = datetime.now(timezone.utc)
-    subject = f"Your Belgian Investment Cost Digest — {now.strftime('%d %b %Y')}"
+    subject = f"Weekly Brokerage Price Comparison — {now.strftime('%d %b %Y')}"
 
     send_email(subject, html_body, recipients)
 
