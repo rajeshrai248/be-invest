@@ -20,7 +20,8 @@ with sync_playwright() as p:
 
         print("=== Structure Analysis ===")
         print(f"Article tags: {len(soup.find_all('article'))}")
-        print(f"Divs with 'news' in class: {len(soup.select('div[class*=\"news\"]'))}")
+        news_divs = soup.select('div[class*="news"]')
+        print(f"Divs with 'news' in class: {len(news_divs)}")
         print(f"Divs with 'card' in class: {len(soup.select('div[class*=\"card\"]'))}")
         print(f"Links (a tags): {len(soup.find_all('a'))}")
 

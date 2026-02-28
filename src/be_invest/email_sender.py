@@ -36,21 +36,50 @@ def _get_recipients() -> list[str]:
 # ========================================================================================
 
 _STYLES = """
-    body { font-family: Arial, sans-serif; color: #333; margin: 0; padding: 0; background: #f5f5f5; }
-    .wrapper { max-width: 800px; margin: 0 auto; background: #fff; }
-    .header { background: #e87722; color: #fff; padding: 24px 32px; }
-    .header h1 { margin: 0; font-size: 22px; }
-    .header p { margin: 6px 0 0; font-size: 13px; opacity: 0.85; }
-    .content { padding: 24px 32px; }
-    h3 { color: #e87722; font-size: 15px; border-bottom: 2px solid #ffe0c2; padding-bottom: 6px; margin: 28px 0 10px; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 16px; font-size: 13px; }
-    th { background: #e87722; color: #fff; padding: 7px 10px; text-align: right; cursor: help; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; color: #111827; margin: 0; padding: 24px 0; background: #f3f4f6; }
+    .wrapper { max-width: 700px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+    .header { background: #e87722; color: #fff; padding: 36px 40px; }
+    .header-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.8; margin: 0 0 10px; }
+    .header h1 { margin: 0 0 8px; font-size: 26px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.2; }
+    .header p { margin: 0; font-size: 13px; opacity: 0.85; }
+    .content { padding: 36px 40px; }
+    p { word-wrap: break-word; overflow-wrap: break-word; max-width: 100%; margin: 0 0 16px; }
+    em { word-wrap: break-word; overflow-wrap: break-word; }
+    .intro { font-size: 14px; color: #374151; line-height: 1.75; margin-bottom: 32px; padding-bottom: 28px; border-bottom: 1px solid #e5e7eb; }
+    .section-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #e87722; margin: 36px 0 4px; }
+    h2 { font-size: 20px; font-weight: 700; color: #111827; margin: 0 0 16px; }
+    h3 { color: #111827; font-size: 14px; font-weight: 700; margin: 0 0 12px; }
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 6px; }
+    table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 13px; }
+    th { background: #111827; color: #fff; padding: 11px 14px; text-align: right; font-weight: 600; font-size: 12px; }
     th:first-child { text-align: left; }
-    td { padding: 6px 10px; border-bottom: 1px solid #eee; text-align: right; }
-    td:first-child { text-align: left; font-weight: bold; }
-    tr:hover td { background: #fff5ee; }
-    .cheapest { background: #eafaf1; color: #1a7a3c; font-weight: bold; }
-    .footer { background: #f5f5f5; border-top: 1px solid #ddd; padding: 14px 32px; font-size: 11px; color: #888; }
+    td { padding: 10px 14px; border-bottom: 1px solid #f0f2f5; text-align: right; color: #374151; }
+    td:first-child { text-align: left; font-weight: 600; color: #111827; }
+    tbody tr:nth-child(even) td { background: #f9fafb; }
+    tbody tr:hover td { background: #fff7ed !important; }
+    .cheapest { background: #dcfce7 !important; color: #166534; font-weight: 700; }
+    .rank-1 td { background: #fff7ed !important; }
+    .rank-2 td { background: #f9fafb; }
+    .table-note { font-size: 12px; color: #6b7280; margin: 0 0 24px; line-height: 1.6; }
+    .footnotes { font-size: 11px; color: #6b7280; margin: 10px 0 28px; padding: 14px 16px; background: #f9fafb; border-left: 3px solid #e5e7eb; line-height: 1.9; border-radius: 0 4px 4px 0; }
+    .footnotes strong { color: #374151; }
+    .divider { border: none; border-top: 1px solid #e5e7eb; margin: 36px 0; }
+    .footer { background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 24px 40px; font-size: 11px; color: #9ca3af; text-align: center; line-height: 1.9; }
+    .footer a { color: #e87722; text-decoration: none; font-weight: 600; }
+    @media only screen and (max-width: 620px) {
+        .wrapper { border-radius: 0 !important; }
+        .header { padding: 24px 16px !important; }
+        .header h1 { font-size: 20px !important; }
+        .content { padding: 20px 16px !important; }
+        .footer { padding: 16px !important; }
+        table { min-width: 0 !important; }
+        th { padding: 9px 8px !important; }
+        td { padding: 8px 8px !important; }
+        h2 { font-size: 16px !important; }
+        h3 { font-size: 13px !important; }
+        .section-eyebrow { margin-top: 24px !important; }
+        .hide-mob { display: none !important; }
+    }
 """
 
 
@@ -81,7 +110,19 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
         for amt in amount_cols
     }
 
-    header_cells = "".join(f"<th>€{amt}</th>" for amt in amount_cols)
+    # On mobile keep 4 evenly-spaced columns; hide the rest with .hide-mob
+    n = len(amount_cols)
+    if n <= 4:
+        mobile_hidden: set[str] = set()
+    else:
+        keep = {0, round((n - 1) / 3), round(2 * (n - 1) / 3), n - 1}
+        mobile_hidden = {amt for i, amt in enumerate(amount_cols) if i not in keep}
+
+    def _th(amt: str) -> str:
+        cls = ' class="hide-mob"' if amt in mobile_hidden else ""
+        return f"<th{cls}>€{amt}</th>"
+
+    header_cells = "".join(_th(amt) for amt in amount_cols)
     header = f"<tr><th>Broker</th>{header_cells}</tr>"
 
     rows = []
@@ -89,20 +130,24 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
         broker_logic = (calc_logic or {}).get(broker, {})
         cells = []
         for amt in amount_cols:
+            mob = amt in mobile_hidden
             val = fees.get(amt)
             tooltip = broker_logic.get(amt, "")
-            title_attr = f' title="{tooltip}"' if tooltip else ""
+            t = f' title="{tooltip}"' if tooltip else ""
             if val is None:
-                cells.append("<td>—</td>")
+                cells.append('<td class="hide-mob">—</td>' if mob else "<td>—</td>")
             elif val == min_per_col[amt]:
-                cells.append(f'<td class="cheapest"{title_attr}>€{val:.2f}</td>')
+                cls = "cheapest hide-mob" if mob else "cheapest"
+                cells.append(f'<td class="{cls}"{t}>€{val:.2f}</td>')
             else:
-                cells.append(f"<td{title_attr}>€{val:.2f}</td>")
+                cells.append(f'<td class="hide-mob"{t}>€{val:.2f}</td>' if mob else f"<td{t}>€{val:.2f}</td>")
         rows.append(f"<tr><td>{broker}</td>{''.join(cells)}</tr>")
 
     return (
         f"<h3>{asset_label}</h3>"
+        f'<div class="table-wrap">'
         f"<table><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
+        f"</div>"
     )
 
 
@@ -146,7 +191,15 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
          "Usually a percentage of the dividend amount, often with a minimum and maximum cap."),
     ]
 
-    header_cells = "".join(f'<th title="{tip}">{label} &#9432;</th>' for label, _, tip in columns)
+    # Subscription (idx 2) and Handling (idx 4) hidden on mobile — less critical
+    _COST_MOB_HIDDEN = {2, 4}
+
+    header_cells = "".join(
+        f'<th class="hide-mob" title="{tip}">{label} <sup style="font-size:9px;opacity:0.75;">{i}</sup></th>'
+        if (i - 1) in _COST_MOB_HIDDEN else
+        f'<th title="{tip}">{label} <sup style="font-size:9px;opacity:0.75;">{i}</sup></th>'
+        for i, (label, _key, tip) in enumerate(columns, 1)
+    )
     header = f"<tr><th>Broker</th>{header_cells}</tr>"
 
     rows = []
@@ -191,17 +244,28 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
         notes = g.get('notes', '')
         row_title = f' title="{notes}"' if notes else ""
         cells = "".join(
-            f"<td>{v}</td>" for v in [custody, connectivity, subscription, fx, handling, dividend]
+            f'<td class="hide-mob">{v}</td>' if col_idx in _COST_MOB_HIDDEN else f"<td>{v}</td>"
+            for col_idx, v in enumerate([custody, connectivity, subscription, fx, handling, dividend])
         )
         rows.append(f"<tr{row_title}><td>{broker}</td>{cells}</tr>")
 
+    footnote_items = "".join(
+        f'<span class="hide-mob"><strong>{i}. {label}:</strong> {tip}<br></span>'
+        if (i - 1) in _COST_MOB_HIDDEN else
+        f"<strong>{i}. {label}:</strong> {tip}<br>"
+        for i, (label, _key, tip) in enumerate(columns, 1)
+    )
     return (
-        "<h3>Additional Ongoing Costs</h3>"
-        "<p style='font-size:12px;color:#666;margin:0 0 8px;'>"
-        "Costs beyond per-trade fees — custody, connectivity, subscriptions, and FX charges. "
-        "Hover over a column header &#9432; for an explanation of each cost type. "
-        "Hover over a broker row for broker-specific notes.</p>"
+        '<p class="section-eyebrow">Ongoing Costs</p>'
+        "<h3>Additional Costs Beyond Trading Fees</h3>"
+        '<p class="table-note">'
+        "Recurring charges that apply regardless of trading activity. "
+        "Superscript numbers refer to the footnotes below the table. "
+        "Hover a column header (desktop) to preview its description.</p>"
+        f'<div class="table-wrap">'
         f"<table><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
+        f"</div>"
+        f'<div class="footnotes">{footnote_items}</div>'
     )
 
 
@@ -210,11 +274,13 @@ def _render_persona_section(investor_personas: dict, persona_definitions: dict) 
     if not investor_personas:
         return ""
 
-    sections = ["<h2>Investor Persona TCO Rankings</h2>"]
-    sections.append(
-        "<p>Annual total cost of ownership (TCO) per investor profile, "
-        "including trading costs, custody, connectivity, and other fees.</p>"
-    )
+    sections = [
+        '<hr class="divider">'
+        '<p class="section-eyebrow">Investor Profiles</p>'
+        "<h2>Total Cost of Ownership Rankings</h2>"
+        '<p class="table-note">Annual cost per investor profile including trading fees, '
+        "custody, connectivity, and all other charges.</p>"
+    ]
 
     for persona_key, results in investor_personas.items():
         persona_def = persona_definitions.get(persona_key, {})
@@ -259,7 +325,9 @@ def _render_persona_section(investor_personas: dict, persona_definitions: dict) 
             )
 
         sections.append(
+            f'<div class="table-wrap">'
             f"<table><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
+            f"</div>"
         )
 
     return "\n".join(sections)
@@ -296,18 +364,23 @@ def build_email_html(tables_data: dict) -> str:
 
     hidden_costs = tables_data.get("hidden_costs", {})
 
+    cheapest_badge = (
+        "<span style='background:#dcfce7;color:#166534;font-weight:700;"
+        "padding:2px 8px;border-radius:10px;font-size:11px;'>Green</span>"
+    )
     fee_section = (
-        "<p>Fees shown per trade for common investment amounts. "
-        "All amounts in EUR. Calculations are deterministic and rule-based. "
-        "<span style='background:#eafaf1;color:#1a7a3c;font-weight:bold;padding:1px 5px;border-radius:3px;font-size:12px;'>Green</span>"
-        " = cheapest broker for that amount. Hover over any value to see how it is calculated.</p>"
+        '<p class="section-eyebrow">Transaction Fees by Investment Amount</p>'
+        "<h2>Per-Trade Cost Comparison</h2>"
+        f'<p class="table-note">All amounts in EUR. Fees are deterministic and rule-based. '
+        f"{cheapest_badge} = cheapest broker for that amount. "
+        "Hover any cell (desktop) to see the full calculation.</p>"
         + _render_fee_table(
-            "Stocks transaction fees by investment amount (Euronext Brussels)",
+            "Stocks — Euronext Brussels, Amsterdam & Paris",
             all_stocks,
             stocks_logic,
         )
         + _render_fee_table(
-            "ETFs transaction fees by investment amount (Euronext Brussels)",
+            "ETFs — Euronext Brussels, Amsterdam & Paris",
             all_etfs,
             etfs_logic,
         )
@@ -319,30 +392,31 @@ def build_email_html(tables_data: dict) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your Belgian Investment Cost Digest</title>
+  <title>Belgian Investment Cost Digest</title>
   <style>{_STYLES}</style>
 </head>
 <body>
 <div class="wrapper">
   <div class="header">
-    <h1>Your Belgian Investment Cost Digest</h1>
-    <p>Fee comparison for Belgian retail investors — {now_str}</p>
+    <p class="header-eyebrow">Belgian Broker Fee Report</p>
+    <h1>Your Investment Cost Digest</h1>
+    <p>{now_str}</p>
   </div>
   <div class="content">
-    <p>
+    <p class="intro">
       Knowing what you pay in broker fees can make a significant difference to your
-      long-term investment returns. This digest compares transaction costs across
-      Belgian retail brokers so you can make informed, cost-efficient decisions.
+      long-term investment returns. This digest compares transaction costs and ongoing
+      charges across Belgian retail brokers so you can make informed, cost-efficient decisions.
     </p>
     {fee_section}
   </div>
   <div class="footer">
-    Your Belgian Investment Cost Digest — generated on {now_str}.<br>
-    Fees are based on published tariff schedules and may change; always verify with your broker.<br><br>
-    For full broker comparisons, live data, and personalised cost analysis, visit
-    <a href="https://rajeshrai248.uk" style="color: #e87722; text-decoration: none; font-weight: bold;">rajeshrai248.uk</a>.<br>
-    <span style="font-size: 10px; color: #aaa;">
-      This report is for informational purposes only and does not constitute financial advice.
+    Generated on {now_str}.<br>
+    Fees are based on published tariff schedules and may change — always verify with your broker.<br><br>
+    Full comparisons, live data, and personalised cost analysis at
+    <a href="https://rajeshrai248.uk">rajeshrai248.uk</a><br>
+    <span style="font-size:10px;color:#c0c4cc;">
+      For informational purposes only. Not financial advice.
     </span>
   </div>
 </div>

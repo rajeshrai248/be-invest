@@ -37,7 +37,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def extract_fees_with_gpt4o(text: str, broker_name: str, api_key: str) -> list[dict]:
+def extract_fees_with_gpt4o(text: str, broker_name: str, api_key: str, model: str = "gpt-4o") -> list[dict]:
     """Extract fees directly using GPT-4o with real-time progress.
 
     Args:
@@ -133,7 +133,7 @@ Extract ALL fee tiers and structures. Be thorough. Return valid JSON only."""
         return []
 
 
-def generate_summary_with_gpt4o(fee_records: list[dict], api_key: str) -> str:
+def generate_summary_with_gpt4o(fee_records: list[dict], api_key: str, model: str = "gpt-4o") -> str:
     """Generate summary using GPT-4o with real-time progress.
 
     Args:
@@ -327,7 +327,7 @@ Examples:
         if "101" in text_file.stem:
             broker_name = "Bolero"
 
-        records = extract_fees_with_gpt4o(text_content, broker_name, api_key)
+        records = extract_fees_with_gpt4o(text_content, broker_name, api_key, args.model)
         all_records.extend(records)
         logger.info(f"✅ Total records so far: {len(all_records)}")
 
@@ -350,7 +350,7 @@ Examples:
     logger.info("📊 GENERATING SUMMARY")
     logger.info("=" * 70)
 
-    summary = generate_summary_with_gpt4o(all_records, api_key)
+    summary = generate_summary_with_gpt4o(all_records, api_key, args.model)
     if not summary:
         logger.warning("⚠️  Summary generation failed, using fallback template")
         summary = generate_fallback_summary(all_records)

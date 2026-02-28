@@ -3000,7 +3000,7 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
 @time_api_call
 def send_email_report(body: EmailSendRequest = Body(default=EmailSendRequest())):
     """Manually trigger an immediate broker fee report email."""
-    global _email_send_in_progress, _last_email_sent_at
+    global _last_email_sent_at
     if _email_send_in_progress:
         raise HTTPException(status_code=409, detail="Email send already in progress.")
     try:
@@ -3041,7 +3041,6 @@ def _start_news_scrape_scheduler():
 @app.on_event("shutdown")
 def _flush_langfuse():
     """Ensure all Langfuse traces are sent before the process exits."""
-    global _news_scrape_timer, _email_scheduler_timer
     if _news_scrape_timer is not None:
         _news_scrape_timer.cancel()
     if _email_scheduler_timer is not None:
