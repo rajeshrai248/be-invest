@@ -377,7 +377,7 @@ def send_email(subject: str, html_body: str, recipients: list[str]) -> None:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = from_addr
-    msg["To"] = ", ".join(recipients)
+    msg["To"] = from_addr  # BCC behaviour: recipients are passed to sendmail() only, never exposed in headers
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     # Read at call time so .env changes take effect without module reimport
