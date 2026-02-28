@@ -793,7 +793,7 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
 
                 response = client.messages.create(
                     model=model,
-                    max_tokens=4096,
+                    max_tokens=8192,
                     temperature=effective_temperature,
                     system=system_prompt,
                     messages=api_messages,
