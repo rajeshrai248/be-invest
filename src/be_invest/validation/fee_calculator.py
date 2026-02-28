@@ -56,6 +56,7 @@ class HiddenCosts:
     connectivity_fee_per_exchange_year: float = 0.0
     connectivity_fee_max_pct_account: float = 0.0
     subscription_fee_monthly: float = 0.0
+    subscription_plan_name: str = ""
     fx_fee_pct: float = 0.0
     handling_fee_per_trade: float = 0.0
     dividend_fee_pct: float = 0.0

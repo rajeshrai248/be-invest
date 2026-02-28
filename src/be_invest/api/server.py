@@ -2232,6 +2232,7 @@ Return a JSON object with EXACTLY this structure:
       "connectivity_fee_per_exchange_year": 0.0,
       "connectivity_fee_max_pct_account": 0.0,
       "subscription_fee_monthly": 0.0,
+      "subscription_plan_name": "",
       "fx_fee_pct": 0.0,
       "handling_fee_per_trade": 0.0,
       "dividend_fee_pct": 0.0,
@@ -2267,6 +2268,12 @@ IMPORTANT:
   Always use the standard/default rate that applies to ALL instruments of that type.
 - A rule where ALL fees are EUR 0.00 is almost certainly wrong. If fees appear
   to be zero, double-check whether a separate handling fee or commission applies.
+- For brokers with SUBSCRIPTION-BASED pricing (e.g., monthly plans that include a number
+  of free trades): set subscription_fee_monthly to the lowest PAID tier price (not the
+  free/basic plan), and set subscription_plan_name to the name of that entry-level paid plan
+  (e.g. "Plus", "Premium", "Pro"). Document ALL subscription tiers and what they include
+  (free trades, FX limits, etc.) in the notes field.
+  Example: subscription_fee_monthly=2.99, subscription_plan_name="Plus".
 """
 
         try:
@@ -2302,6 +2309,7 @@ IMPORTANT:
                         connectivity_fee_per_exchange_year=costs_dict.get("connectivity_fee_per_exchange_year", 0.0),
                         connectivity_fee_max_pct_account=costs_dict.get("connectivity_fee_max_pct_account", 0.0),
                         subscription_fee_monthly=costs_dict.get("subscription_fee_monthly", 0.0),
+                        subscription_plan_name=costs_dict.get("subscription_plan_name", ""),
                         fx_fee_pct=costs_dict.get("fx_fee_pct", 0.0),
                         handling_fee_per_trade=costs_dict.get("handling_fee_per_trade", 0.0),
                         dividend_fee_pct=costs_dict.get("dividend_fee_pct", 0.0),
