@@ -1,0 +1,428 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" version="21.0.0">
+  <diagram id="future-arch" name="be-invest Future Architecture — Human Feedback Loop">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1430" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- TITLE -->
+        <mxCell id="title" value="be-invest Platform — Future Architecture: Human Feedback Loop HLD" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=26;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="10" width="2000" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- SECTION BACKGROUNDS — same as current architecture           -->
+        <!-- ============================================================ -->
+
+        <mxCell id="bg_client" value="" style="rounded=1;fillColor=#BBDEFB;strokeColor=#1565C0;strokeWidth=3;" vertex="1" parent="1">
+          <mxGeometry x="20" y="68" width="2160" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_client" value="CLIENT LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#1565C0;" vertex="1" parent="1">
+          <mxGeometry x="34" y="74" width="200" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="bg_api" value="" style="rounded=1;fillColor=#C8E6C9;strokeColor=#2E7D32;strokeWidth=3;" vertex="1" parent="1">
+          <mxGeometry x="20" y="178" width="2160" height="92" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_api" value="API LAYER   ★ Reads Prompt Registry  ·  ★ A/B Model Selection  (future)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#2E7D32;" vertex="1" parent="1">
+          <mxGeometry x="34" y="184" width="700" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="bg_endpoints" value="" style="rounded=1;fillColor=#FFE0B2;strokeColor=#E65100;strokeWidth=3;" vertex="1" parent="1">
+          <mxGeometry x="20" y="280" width="2160" height="152" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_endpoints" value="API ENDPOINTS" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#E65100;" vertex="1" parent="1">
+          <mxGeometry x="34" y="286" width="220" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="bg_business" value="" style="rounded=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;strokeWidth=3;" vertex="1" parent="1">
+          <mxGeometry x="20" y="442" width="2160" height="148" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_business" value="BUSINESS LOGIC LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#6A1B9A;" vertex="1" parent="1">
+          <mxGeometry x="34" y="448" width="280" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="bg_llm" value="" style="rounded=1;fillColor=#FFCDD2;strokeColor=#B71C1C;strokeWidth=3;" vertex="1" parent="1">
+          <mxGeometry x="20" y="600" width="2160" height="162" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_llm" value="LLM SERVICES LAYER   ★ = A/B tested via Model Router" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#B71C1C;" vertex="1" parent="1">
+          <mxGeometry x="34" y="606" width="500" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="bg_data" value="" style="rounded=1;fillColor=#CFD8DC;strokeColor=#37474F;strokeWidth=3;" vertex="1" parent="1">
+          <mxGeometry x="20" y="772" width="1058" height="128" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_data" value="DATA LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#37474F;" vertex="1" parent="1">
+          <mxGeometry x="34" y="778" width="200" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="bg_obs" value="" style="rounded=1;fillColor=#B2DFDB;strokeColor=#004D40;strokeWidth=3;" vertex="1" parent="1">
+          <mxGeometry x="1102" y="772" width="1078" height="128" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_obs" value="OBSERVABILITY &amp; AUTO-EVALUATION LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#004D40;" vertex="1" parent="1">
+          <mxGeometry x="1116" y="778" width="420" height="24" as="geometry" />
+        </mxCell>
+
+        <!-- ★ NEW: HUMAN FEEDBACK LAYER -->
+        <mxCell id="bg_human" value="" style="rounded=1;fillColor=#B2EBF2;strokeColor=#006064;strokeWidth=4;" vertex="1" parent="1">
+          <mxGeometry x="20" y="918" width="2160" height="188" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_human" value="★  NEW — HUMAN FEEDBACK LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=16;fontColor=#006064;" vertex="1" parent="1">
+          <mxGeometry x="34" y="924" width="500" height="26" as="geometry" />
+        </mxCell>
+
+        <!-- ★ NEW: CONTINUOUS IMPROVEMENT LAYER -->
+        <mxCell id="bg_improve" value="" style="rounded=1;fillColor=#DCEDC8;strokeColor=#33691E;strokeWidth=4;" vertex="1" parent="1">
+          <mxGeometry x="20" y="1120" width="2160" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_improve" value="★  NEW — CONTINUOUS IMPROVEMENT LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=16;fontColor=#33691E;" vertex="1" parent="1">
+          <mxGeometry x="34" y="1126" width="560" height="26" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- CURRENT ARCHITECTURE COMPONENTS (same bold style)            -->
+        <!-- ============================================================ -->
+
+        <mxCell id="client" value="&lt;b&gt;Browser / API Consumer&lt;/b&gt;&lt;br&gt;&lt;br&gt;REST Client  ·  Swagger UI  ·  Frontend Application" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1565C0;strokeColor=#0D47A1;fontColor=#ffffff;fontSize=14;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="640" y="84" width="920" height="68" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fastapi" value="&lt;b&gt;FastAPI Server&lt;/b&gt;   —   src/be_invest/api/server.py   |   Langfuse tracing   |   ★ Reads versioned prompts from Prompt Registry   |   ★ A/B model selection via Model Router" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2E7D32;strokeColor=#1B5E20;fontColor=#ffffff;fontSize=13;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="194" width="2120" height="64" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ep_cost" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/cost-comparison-tables&lt;/b&gt;&lt;br&gt;&lt;br&gt;Deterministic fee tables — all brokers&lt;br&gt;Validator checks table accuracy&lt;br&gt;LLM used only for notes generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="480" height="122" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ep_refresh" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/refresh-and-analyze&lt;/b&gt;&lt;br&gt;&lt;br&gt;Scrapes broker PDFs → GPT-4o extracts&lt;br&gt;Claude Sonnet 4 structures fee rules&lt;br&gt;Updates fee_rules.json at runtime" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="560" y="300" width="480" height="122" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ep_chat" value="&lt;b&gt;POST  /chat&lt;/b&gt;&lt;br&gt;&lt;br&gt;Natural language Q&amp;A · Multi-turn&lt;br&gt;Regex: broker / instrument / EUR amount&lt;br&gt;Pre-computes deterministic fees for context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="300" width="480" height="122" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ep_financial" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/financial-analysis&lt;/b&gt;&lt;br&gt;&lt;br&gt;Broker comparison narrative&lt;br&gt;Investor-specific recommendations&lt;br&gt;LLM: Claude Sonnet 4 · temp=0.0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="300" width="480" height="122" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fee_calc" value="&lt;b&gt;Fee Calculator&lt;/b&gt;&lt;br&gt;&lt;br&gt;validation/fee_calculator.py&lt;br&gt;Patterns: flat · tiered_flat · tiered_flat_then_slice&lt;br&gt;percentage_with_min · base_plus_slice" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="460" width="655" height="118" as="geometry" />
+        </mxCell>
+
+        <mxCell id="persona_calc" value="&lt;b&gt;Persona Calculator&lt;/b&gt;&lt;br&gt;&lt;br&gt;validation/persona_calculator.py&lt;br&gt;TCO: passive · moderate · active_trader&lt;br&gt;Results cached 5 min in cache.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="735" y="460" width="655" height="118" as="geometry" />
+        </mxCell>
+
+        <mxCell id="validator" value="&lt;b&gt;Validator&lt;/b&gt;&lt;br&gt;&lt;br&gt;validation/validator.py&lt;br&gt;Validates LLM tables vs deterministic output&lt;br&gt;Delegates explanations to _explain_fee()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="460" width="680" height="118" as="geometry" />
+        </mxCell>
+
+        <mxCell id="llm_gpt4o" value="&lt;b&gt;GPT-4o  ★&lt;/b&gt;&lt;br&gt;&lt;br&gt;Role: PDF → Raw fee records&lt;br&gt;Module: llm_extract.py&lt;br&gt;temp=0.0  ·  JSON mode" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="620" width="470" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="llm_claude" value="&lt;b&gt;Claude Sonnet 4  ★&lt;/b&gt;&lt;br&gt;&lt;br&gt;① Fee rules structuring&lt;br&gt;② Financial analysis narrative&lt;br&gt;③ Cost-comparison notes&lt;br&gt;temp=0.0  ·  JSON / text" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="560" y="620" width="470" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="llm_groq" value="&lt;b&gt;Groq · Llama-3.3-70B  ★&lt;/b&gt;&lt;br&gt;&lt;br&gt;Role: Chat primary LLM&lt;br&gt;Low-latency via Groq Cloud&lt;br&gt;temp=0.3  ·  Multi-turn conversation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="620" width="470" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="llm_gemini_flash" value="&lt;b&gt;Gemini 2.0 Flash  ★&lt;/b&gt;&lt;br&gt;&lt;br&gt;Role: Chat fallback model&lt;br&gt;Activated when Groq fails&lt;br&gt;temp=0.3  ·  Text output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="620" width="470" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pdf_files" value="&lt;b&gt;Broker PDF Documents&lt;/b&gt;&lt;br&gt;&lt;br&gt;6 Belgian brokers&lt;br&gt;Fee schedules &amp; tariff cards" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="42" y="800" width="306" height="88" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fee_rules_json" value="&lt;b&gt;fee_rules.json&lt;/b&gt;&lt;br&gt;&lt;br&gt;FeeRule + HiddenCosts per broker&lt;br&gt;data/output/ — runtime load" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="380" y="800" width="350" height="88" as="geometry" />
+        </mxCell>
+
+        <mxCell id="cache_mem" value="&lt;b&gt;In-Memory Cache&lt;/b&gt;&lt;br&gt;&lt;br&gt;Persona TCO rankings&lt;br&gt;TTL: 5 min  ·  cache.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="762" y="800" width="300" height="88" as="geometry" />
+        </mxCell>
+
+        <mxCell id="langfuse" value="&lt;b&gt;Langfuse&lt;/b&gt;&lt;br&gt;&lt;br&gt;LLM Observability Platform&lt;br&gt;Traces all 4 endpoints&lt;br&gt;Trace viewer for human reviewers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1122" y="800" width="310" height="88" as="geometry" />
+        </mxCell>
+
+        <mxCell id="llm_judge" value="&lt;b&gt;Gemini 2.5 Pro  (LLM-as-Judge)&lt;/b&gt;&lt;br&gt;&lt;br&gt;evaluation/llm_judge.py&lt;br&gt;Auto groundedness: 0 · 0.5 · 1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1466" y="800" width="370" height="88" as="geometry" />
+        </mxCell>
+
+        <mxCell id="eval_results" value="&lt;b&gt;Langfuse Evaluations DB&lt;/b&gt;&lt;br&gt;&lt;br&gt;Auto + Human scores per trace_id&lt;br&gt;Queryable for quality trends" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1868" y="800" width="296" height="88" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- NEW: HUMAN FEEDBACK COMPONENTS                               -->
+        <!-- ============================================================ -->
+
+        <mxCell id="human_reviewer" value="&lt;b&gt;Human Reviewers&lt;/b&gt;&lt;br&gt;&lt;br&gt;Domain experts&lt;br&gt;Finance analysts&lt;br&gt;QA engineers" style="shape=mxgraph.basic.person;whiteSpace=wrap;html=1;fillColor=#006064;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="42" y="954" width="150" height="138" as="geometry" />
+        </mxCell>
+
+        <mxCell id="annotation_ui" value="&lt;b&gt;Human Annotation UI&lt;/b&gt;&lt;br&gt;&lt;br&gt;Langfuse Annotations or custom web app&lt;br&gt;View: prompt · output · retrieved context&lt;br&gt;Score: ✗ (0)  ·  ≈ (0.5)  ·  ✓ (1)&lt;br&gt;Add free-text reasoning &amp; comments" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#006064;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="238" y="954" width="440" height="138" as="geometry" />
+        </mxCell>
+
+        <mxCell id="human_score_db" value="&lt;b&gt;Human Score Database&lt;/b&gt;&lt;br&gt;&lt;br&gt;score  ·  trace_id  ·  endpoint&lt;br&gt;comment  ·  reviewer_id&lt;br&gt;model_version  ·  timestamp" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#006064;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="724" y="954" width="380" height="138" as="geometry" />
+        </mxCell>
+
+        <mxCell id="score_aggregation" value="&lt;b&gt;Score Aggregation Service&lt;/b&gt;&lt;br&gt;&lt;br&gt;Merges auto-eval + human scores&lt;br&gt;Rolling averages per endpoint &amp; model&lt;br&gt;Detects quality regressions&lt;br&gt;Triggers alerts on threshold breach" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#006064;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1154" y="954" width="450" height="138" as="geometry" />
+        </mxCell>
+
+        <mxCell id="alert_system" value="&lt;b&gt;Alert System&lt;/b&gt;&lt;br&gt;&lt;br&gt;Score below threshold&lt;br&gt;→ Slack / email notification&lt;br&gt;→ Incident log creation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1654" y="954" width="320" height="138" as="geometry" />
+        </mxCell>
+
+        <mxCell id="langfuse_datasets" value="&lt;b&gt;Langfuse Datasets&lt;/b&gt;&lt;br&gt;&lt;br&gt;Curated good / bad examples&lt;br&gt;Human-tagged trace subsets&lt;br&gt;Regression test suite" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#006064;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="2020" y="954" width="150" height="138" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- NEW: CONTINUOUS IMPROVEMENT COMPONENTS                       -->
+        <!-- ============================================================ -->
+
+        <mxCell id="prompt_optimizer" value="&lt;b&gt;Prompt Optimizer&lt;/b&gt;&lt;br&gt;&lt;br&gt;Analyses low-scoring traces&lt;br&gt;Identifies failure patterns&lt;br&gt;Generates improved prompts&lt;br&gt;(Manual review or DSPy automated)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#33691E;strokeColor=#1B5E20;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1148" width="420" height="155" as="geometry" />
+        </mxCell>
+
+        <mxCell id="prompt_registry" value="&lt;b&gt;Prompt Registry&lt;/b&gt;&lt;br&gt;&lt;br&gt;Langfuse Prompts feature&lt;br&gt;Versioned prompts per task&lt;br&gt;A / B prompt variants&lt;br&gt;Rollback on regression" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#33691E;strokeColor=#1B5E20;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="510" y="1148" width="370" height="155" as="geometry" />
+        </mxCell>
+
+        <mxCell id="model_router" value="&lt;b&gt;Model Router / A/B Framework&lt;/b&gt;&lt;br&gt;&lt;br&gt;Routes traffic: Model A vs B (% split)&lt;br&gt;Tracks per-model quality scores&lt;br&gt;Auto-promotes winner after n requests&lt;br&gt;Config-driven — no code change needed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#33691E;strokeColor=#1B5E20;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="940" y="1148" width="460" height="155" as="geometry" />
+        </mxCell>
+
+        <mxCell id="model_registry" value="&lt;b&gt;Model Registry&lt;/b&gt;&lt;br&gt;&lt;br&gt;Available models + versions&lt;br&gt;Per-endpoint model config&lt;br&gt;Cost vs quality trade-off matrix&lt;br&gt;(e.g. Opus 4 vs Sonnet 4)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#33691E;strokeColor=#1B5E20;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1460" y="1148" width="400" height="155" as="geometry" />
+        </mxCell>
+
+        <mxCell id="finetune_pipeline" value="&lt;b&gt;Fine-tuning Pipeline  (future)&lt;/b&gt;&lt;br&gt;&lt;br&gt;Langfuse Datasets → JSONL export&lt;br&gt;SFT on domain-specific fee data&lt;br&gt;Validate on held-out traces&lt;br&gt;Deploy fine-tuned model to registry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#558B2F;strokeColor=#33691E;fontColor=#ffffff;fontSize=12;strokeWidth=2;strokeDashArray=10 5;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="1148" width="240" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- LEGEND                                                        -->
+        <!-- ============================================================ -->
+        <mxCell id="legend_bg" value="" style="rounded=1;fillColor=#FAFAFA;strokeColor=#333333;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1650" y="628" width="460" height="136" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_hdr" value="&lt;b&gt;Legend&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1650" y="630" width="460" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="ls1" style="edgeStyle=none;html=1;strokeWidth=3;strokeColor=#333333;endArrow=block;endFill=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1670" y="666" as="sourcePoint" />
+            <mxPoint x="1740" y="666" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ll1" value="Primary data / control flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1748" y="657" width="350" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="ls2" style="edgeStyle=none;html=1;strokeWidth=2;dashed=1;strokeColor=#333333;endArrow=block;endFill=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1670" y="690" as="sourcePoint" />
+            <mxPoint x="1740" y="690" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ll2" value="Read / optional / fallback" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1748" y="681" width="350" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="ls3" style="edgeStyle=none;html=1;strokeWidth=3;strokeColor=#006064;endArrow=block;endFill=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1670" y="714" as="sourcePoint" />
+            <mxPoint x="1740" y="714" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ll3" value="Human feedback flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1748" y="705" width="350" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="ls4" style="edgeStyle=none;html=1;strokeWidth=3;strokeColor=#33691E;endArrow=block;endFill=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1670" y="738" as="sourcePoint" />
+            <mxPoint x="1740" y="738" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ll4" value="Continuous improvement flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1748" y="729" width="350" height="18" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- CONNECTIONS — CURRENT ARCHITECTURE                           -->
+        <!-- ============================================================ -->
+
+        <mxCell id="e01" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="client" target="fastapi" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e02" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="fastapi" target="ep_cost" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e03" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="fastapi" target="ep_refresh" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e04" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="fastapi" target="ep_chat" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e05" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="fastapi" target="ep_financial" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e06" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="ep_cost" target="fee_calc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e07" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="ep_cost" target="persona_calc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e08" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="ep_cost" target="validator" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e09" value="notes only" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeWidth=2;fontStyle=2;fontSize=11;" edge="1" source="ep_cost" target="llm_claude" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="ep_refresh" target="llm_gpt4o" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="structured" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;fontStyle=2;fontSize=11;" edge="1" source="llm_gpt4o" target="llm_claude" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="writes" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;fontStyle=2;fontSize=11;" edge="1" source="llm_claude" target="fee_rules_json" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="pdf_files" target="llm_gpt4o" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="ep_chat" target="llm_groq" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" value="pre-compute" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeWidth=2;fontStyle=2;fontSize=11;" edge="1" source="ep_chat" target="fee_calc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" value="fallback" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeWidth=2;strokeColor=#C62828;fontStyle=2;fontSize=11;" edge="1" source="llm_groq" target="llm_gemini_flash" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="ep_financial" target="llm_claude" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" value="reads" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeWidth=2;fontStyle=2;fontSize=11;" edge="1" source="fee_calc" target="fee_rules_json" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" source="persona_calc" target="cache_mem" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e20" value="traces (async)" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeWidth=2;strokeColor=#004D40;fontStyle=2;fontSize=11;" edge="1" source="fastapi" target="langfuse" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e21" value="auto-evaluate" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;strokeColor=#004D40;fontStyle=2;fontSize=11;" edge="1" source="langfuse" target="llm_judge" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e22" value="score" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;strokeColor=#004D40;fontStyle=2;fontSize=11;" edge="1" source="llm_judge" target="eval_results" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- CONNECTIONS — HUMAN FEEDBACK LOOP                            -->
+        <!-- ============================================================ -->
+
+        <!-- Langfuse → Annotation UI (reviewer views traces) -->
+        <mxCell id="f01" value="view traces" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#006064;fontStyle=2;fontSize=11;" edge="1" source="langfuse" target="annotation_ui" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Human Reviewer → Annotation UI -->
+        <mxCell id="f02" value="score + comment" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#006064;fontStyle=2;fontSize=11;" edge="1" source="human_reviewer" target="annotation_ui" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Annotation UI → Human Score DB -->
+        <mxCell id="f03" value="persist score" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#006064;fontStyle=2;fontSize=11;" edge="1" source="annotation_ui" target="human_score_db" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Human Score DB → Score Aggregation -->
+        <mxCell id="f04" value="human scores" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#006064;fontStyle=2;fontSize=11;" edge="1" source="human_score_db" target="score_aggregation" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Eval Results → Score Aggregation -->
+        <mxCell id="f05" value="auto scores" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#006064;fontStyle=2;fontSize=11;" edge="1" source="eval_results" target="score_aggregation" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Score Aggregation → Alert System -->
+        <mxCell id="f06" value="threshold breach" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#E65100;fontStyle=2;fontSize=11;" edge="1" source="score_aggregation" target="alert_system" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Score Aggregation → Langfuse Datasets (tag examples) -->
+        <mxCell id="f07" value="tag examples" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#006064;fontStyle=2;fontSize=11;" edge="1" source="score_aggregation" target="langfuse_datasets" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- CONNECTIONS — CONTINUOUS IMPROVEMENT                         -->
+        <!-- ============================================================ -->
+
+        <!-- Score Aggregation → Prompt Optimizer -->
+        <mxCell id="g01" value="low-score traces" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#33691E;fontStyle=2;fontSize=11;" edge="1" source="score_aggregation" target="prompt_optimizer" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Prompt Optimizer → Prompt Registry -->
+        <mxCell id="g02" value="publish v+1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#33691E;fontStyle=2;fontSize=11;" edge="1" source="prompt_optimizer" target="prompt_registry" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Prompt Registry → FastAPI (feedback loop back to server) -->
+        <mxCell id="g03" value="reads versioned prompts" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#33691E;dashed=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.25;entryY=1;entryDx=0;entryDy=0;fontStyle=1;fontSize=12;" edge="1" source="prompt_registry" target="fastapi" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="695" y="1100" />
+              <mxPoint x="695" y="186" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Score Aggregation → Model Router -->
+        <mxCell id="g04" value="per-model scores" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#33691E;fontStyle=2;fontSize=11;" edge="1" source="score_aggregation" target="model_router" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Model Router → Model Registry -->
+        <mxCell id="g05" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#33691E;" edge="1" source="model_router" target="model_registry" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Model Router → FastAPI (A/B config feedback loop) -->
+        <mxCell id="g06" value="A/B model selection" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=3;strokeColor=#33691E;dashed=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.75;entryY=1;entryDx=0;entryDy=0;fontStyle=1;fontSize=12;" edge="1" source="model_router" target="fastapi" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1170" y="1100" />
+              <mxPoint x="1170" y="186" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Langfuse Datasets → Fine-tuning Pipeline -->
+        <mxCell id="g07" value="good/bad examples" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;strokeColor=#33691E;dashed=1;fontStyle=2;fontSize=11;" edge="1" source="langfuse_datasets" target="finetune_pipeline" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Fine-tuning Pipeline → Model Registry -->
+        <mxCell id="g08" value="custom model" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;strokeColor=#33691E;dashed=1;fontStyle=2;fontSize=11;" edge="1" source="finetune_pipeline" target="model_registry" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
