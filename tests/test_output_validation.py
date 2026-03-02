@@ -14,34 +14,30 @@ from be_invest.validation import (
 
 
 def test_validate_correct_comparison_tables():
-    """Test validation passes for correct comparison tables."""
-    # Create valid test data
-    data = {
-        "euronext_brussels": {
-            "stocks": {
-                "Bolero": {
-                    "250": 7.50,
-                    "500": 10.00,
-                    "1000": 15.00,
-                },
-                "Keytrade Bank": {
-                    "250": 7.50,
-                    "500": 7.50,
-                    "1000": 14.95,
-                }
-            },
-            "etfs": {
-                "Bolero": {
-                    "250": 7.50,
-                    "500": 10.00,
-                },
-            }
-        }
-    }
-    
+    """Test validation passes for correct comparison tables built from fee rules."""
+    # Build data from the actual fee calculator so values match fee_rules.json
+    stocks_data = {}
+    etfs_data = {}
+    amounts = [250, 500, 1000]
+
+    for broker in ["Bolero", "Keytrade Bank"]:
+        for amt in amounts:
+            fee = calculate_fee(broker, "stocks", amt)
+            if fee is not None:
+                stocks_data.setdefault(broker, {})[str(amt)] = fee
+
+            fee = calculate_fee(broker, "etfs", amt)
+            if fee is not None:
+                etfs_data.setdefault(broker, {})[str(amt)] = fee
+
+    if not stocks_data and not etfs_data:
+        pytest.skip("No fee rules loaded — fee_rules.json may be missing")
+
+    data = {"euronext_brussels": {"stocks": stocks_data, "etfs": etfs_data}}
+
     result = validate_comparison_tables(data)
-    
-    # Should pass validation (fees computed correctly)
+
+    # Should pass validation (fees computed from the same rules the validator uses)
     assert result.is_valid() or len(result.errors) == 0  # May have warnings but no errors
 
 

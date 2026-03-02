@@ -25,7 +25,29 @@ try:
 except ImportError:  # pragma: no cover
     Anthropic = None  # type: ignore
 
-from langfuse.decorators import observe, langfuse_context
+try:
+    from langfuse.decorators import observe, langfuse_context
+except ImportError:  # pragma: no cover – langfuse is optional
+    from functools import wraps
+
+    def observe(**_kw):  # type: ignore[override]
+        """No-op decorator when langfuse is not installed."""
+        def _decorator(fn):
+            @wraps(fn)
+            def _wrapper(*a, **kw):
+                return fn(*a, **kw)
+            return _wrapper
+        return _decorator
+
+    class _NoOpContext:
+        """Stub that silently swallows all langfuse_context calls."""
+        def update_current_observation(self, **_kw): pass
+        def score_current_trace(self, **_kw): pass
+        def observe(self, **_kw):
+            from contextlib import nullcontext
+            return nullcontext()
+
+    langfuse_context = _NoOpContext()  # type: ignore[assignment]
 
 from ..models import FeeRecord
 from ..cache import SimpleCache

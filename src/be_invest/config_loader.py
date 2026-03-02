@@ -9,12 +9,13 @@ import yaml
 from .models import Broker, DataSource, NewsSource
 
 
-def _load_yaml(path: Path) -> dict:
+def _load_yaml(path: Path | str) -> dict:
+    path = Path(path)
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
 
 
-def load_brokers_from_yaml(path: Path) -> List[Broker]:
+def load_brokers_from_yaml(path: Path | str) -> List[Broker]:
     """Load broker definitions from the provided YAML file."""
 
     raw = _load_yaml(path)

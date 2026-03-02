@@ -16,6 +16,38 @@ from email.mime.text import MIMEText
 logger = logging.getLogger(__name__)
 
 # ========================================================================================
+# BROKER LOGO URLS (Google Favicon API — reliable, consistent sizing)
+# ========================================================================================
+
+_BROKER_LOGO_DOMAINS: dict[str, str] = {
+    "bolero": "bolero.be",
+    "degiro": "degiro.nl",
+    "degiro belgium": "degiro.nl",
+    "ing": "ing.be",
+    "ing self invest": "ing.be",
+    "keytrade": "keytradebank.be",
+    "keytrade bank": "keytradebank.be",
+    "rebel": "belfius.be",
+    "re=bel": "belfius.be",
+    "revolut": "revolut.com",
+}
+
+_LOGO_SIZE = 20  # px
+
+
+def _broker_logo_img(broker_name: str) -> str:
+    """Return an <img> tag for the broker's favicon, or empty string if unknown."""
+    domain = _BROKER_LOGO_DOMAINS.get(broker_name.lower())
+    if not domain:
+        return ""
+    url = f"https://www.google.com/s2/favicons?domain={domain}&sz={_LOGO_SIZE * 2}"
+    return (
+        f'<img src="{url}" alt="" width="{_LOGO_SIZE}" height="{_LOGO_SIZE}" '
+        f'style="vertical-align:middle;margin-right:6px;border-radius:3px;" />'
+    )
+
+
+# ========================================================================================
 # MODULE-LEVEL CONFIG (read from env at import time)
 # ========================================================================================
 
@@ -142,7 +174,8 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
                 cells.append(f'<td class="{cls}"{t}>€{val:.2f}</td>')
             else:
                 cells.append(f'<td class="hide-mob"{t}>€{val:.2f}</td>' if mob else f"<td{t}>€{val:.2f}</td>")
-        rows.append(f"<tr><td>{broker}</td>{''.join(cells)}</tr>")
+        logo = _broker_logo_img(broker)
+        rows.append(f"<tr><td>{logo}{broker}</td>{''.join(cells)}</tr>")
 
     return (
         f"<h3>{asset_label}</h3>"
@@ -285,7 +318,8 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
             f'<td class="hide-mob">{v}</td>' if col_idx in _COST_MOB_HIDDEN else f"<td>{v}</td>"
             for col_idx, v in enumerate([custody, connectivity, subscription, fx, handling, dividend])
         )
-        rows.append(f"<tr{row_title}><td>{broker}</td>{cells}</tr>")
+        logo = _broker_logo_img(broker)
+        rows.append(f"<tr{row_title}><td>{logo}{broker}</td>{cells}</tr>")
 
     footnote_items = "".join(
         f'<span class="hide-mob"><strong>{i}. {label}:</strong> {tip}<br></span>'
@@ -356,7 +390,7 @@ def _render_persona_section(investor_personas: dict, persona_definitions: dict) 
             row_class = f' class="rank-{rank}"' if rank in (1, 2) else ""
             rows.append(
                 f"<tr{row_class}>"
-                f"<td>#{rank}</td><td>{broker}</td>"
+                f"<td>#{rank}</td><td>{_broker_logo_img(broker)}{broker}</td>"
                 f"<td>€{trading:.2f}</td><td>€{custody:.2f}</td>"
                 f"<td>€{other:.2f}</td><td><strong>€{tco:.2f}</strong></td>"
                 "</tr>"
