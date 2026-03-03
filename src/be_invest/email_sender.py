@@ -421,7 +421,9 @@ def build_email_html(tables_data: dict) -> str:
                      (e.g. "euronext_brussels") with stocks/etfs/bonds sub-dicts.
                      May also contain "investor_personas" and "persona_definitions".
     """
-    now_str = datetime.now(timezone.utc).strftime("%d %B %Y at %H:%M UTC")
+    now = datetime.now(timezone.utc)
+    now_str = now.strftime("%d %B %Y at %H:%M UTC")
+    year = now.year
 
     # Extract fee tables, calculation logic, and methodology (merge across markets)
     all_stocks: dict = {}
@@ -500,7 +502,8 @@ def build_email_html(tables_data: dict) -> str:
     <a href="https://rajeshrai248.uk">rajeshrai248.uk</a><br>
     <span style="font-size:10px;color:#c0c4cc;">
       For informational purposes only. Not financial advice.<br>
-      Fee data is extracted and compiled by AI agents and may contain errors — always verify against official broker tariff schedules.
+      Fee data is extracted and compiled by AI agents and may contain errors — always verify against official broker tariff schedules.<br>
+      &copy; {year} Rajesh Rai. All rights reserved.
     </span>
   </div>
 </div>
