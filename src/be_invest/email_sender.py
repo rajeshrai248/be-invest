@@ -499,7 +499,8 @@ def build_email_html(tables_data: dict) -> str:
     Full comparisons, live data, and personalised cost analysis at
     <a href="https://rajeshrai248.uk">rajeshrai248.uk</a><br>
     <span style="font-size:10px;color:#c0c4cc;">
-      For informational purposes only. Not financial advice.
+      For informational purposes only. Not financial advice.<br>
+      Fee data is extracted and compiled by AI agents and may contain errors — always verify against official broker tariff schedules.
     </span>
   </div>
 </div>
