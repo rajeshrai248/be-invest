@@ -81,7 +81,7 @@ _rules_loaded_from_json = False
 
 def _register(broker: str, instrument: str, rule: FeeRule) -> None:
     """Register a fee rule in the global registry."""
-    FEE_RULES[(broker.lower(), instrument.lower(), rule.exchange.lower())] = rule
+    FEE_RULES[(_normalize_broker(broker), _normalize_instrument(instrument), rule.exchange.lower())] = rule
 
 
 def _compute_from_tiers(tiers: List[dict], amount: float, handling_fee: float = 0.0,

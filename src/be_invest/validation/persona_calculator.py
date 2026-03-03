@@ -107,9 +107,11 @@ PERSONAS: Dict[str, PersonaDefinition] = {
 }
 
 
-def compute_persona_costs(broker: str, persona_key: str, exchange: str = "all") -> Optional[PersonaCostResult]:
+def compute_persona_costs(broker: str, persona_key: str, exchange: str = "euronext_brussels") -> Optional[PersonaCostResult]:
     """Compute annual TCO for a broker + persona combination.
 
+    Defaults to euronext_brussels since comparison tables target Belgian investors.
+    calculate_fee falls back to exchange="all" if no exact match.
     Returns None if no fee rules exist for this broker.
     """
     _ensure_rules_loaded()

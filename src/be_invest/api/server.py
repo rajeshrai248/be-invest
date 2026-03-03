@@ -139,87 +139,215 @@ _PERSONA_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     },
 }
 
-# Static translation fragments for broker hidden cost notes
+# Static translation fragments for structured broker notes
 _NOTE_LABELS: Dict[str, Dict[str, str]] = {
     "en": {
-        "custody": "Custody",
-        "month": "month",
-        "min": "min",
-        "connectivity": "Connectivity",
-        "exchange_year": "exchange/year",
+        "custody": "Custody fee",
+        "connectivity": "Connectivity fee",
+        "fx": "FX fee",
         "subscription": "Subscription",
-        "fx": "FX",
-        "dividend_fee": "Dividend fee",
-        "no_hidden": "No significant hidden costs",
+        "handling": "Handling fee",
+        "dividend": "Dividend fee",
+        "transfer": "Transfer out",
+        "surcharge": "Surcharges",
+        "market_data": "Market data",
+        "promotion": "Promotions",
+        "other": "Other costs",
     },
     "fr-be": {
         "custody": "Frais de garde",
-        "month": "mois",
-        "min": "min",
-        "connectivity": "Connectivité",
-        "exchange_year": "bourse/an",
-        "subscription": "Abonnement",
+        "connectivity": "Frais de connectivité",
         "fx": "Frais de change",
-        "dividend_fee": "Frais de dividende",
-        "no_hidden": "Pas de frais cachés significatifs",
+        "subscription": "Abonnement",
+        "handling": "Frais de traitement",
+        "dividend": "Frais de dividende",
+        "transfer": "Transfert sortant",
+        "surcharge": "Surcharges",
+        "market_data": "Données de marché",
+        "promotion": "Promotions",
+        "other": "Autres frais",
     },
     "nl-be": {
         "custody": "Bewaarloon",
-        "month": "maand",
-        "min": "min",
-        "connectivity": "Connectiviteit",
-        "exchange_year": "beurs/jaar",
-        "subscription": "Abonnement",
+        "connectivity": "Connectiviteitskosten",
         "fx": "Wisselkoerskosten",
-        "dividend_fee": "Dividendkosten",
-        "no_hidden": "Geen significante verborgen kosten",
+        "subscription": "Abonnement",
+        "handling": "Verwerkingskosten",
+        "dividend": "Dividendkosten",
+        "transfer": "Uitgaande transfer",
+        "surcharge": "Toeslagen",
+        "market_data": "Marktgegevens",
+        "promotion": "Promoties",
+        "other": "Overige kosten",
     },
 }
 
+# Keyword-to-category mapping for parsing raw notes text
+_NOTE_CATEGORY_KEYWORDS: Dict[str, List[str]] = {
+    "custody": ["custody", "bewaarloon", "garde", "dormant"],
+    "connectivity": ["connectivity", "connectiviteit"],
+    "fx": ["fx", "currency", "exchange cost", "wissel", "conversion"],
+    "subscription": ["subscription", "plan", "abonnement"],
+    "handling": ["handling", "afwikkeling", "settlement"],
+    "dividend": ["dividend", "coupon"],
+    "transfer": ["transfer", "outgoing", "sortant"],
+    "surcharge": ["surcharge", "phone", "offline", "orderdesk"],
+    "market_data": ["real-time", "quotes", "market fee"],
+    "promotion": ["promotion", "youth", "discount", "saveback", "interest on cash", "free trade"],
+}
 
-def _build_localized_broker_notes(lang: str) -> Dict[str, str]:
-    """Build broker notes from structured hidden costs using localized labels.
+# Patterns that indicate advantage, warning, or info
+_ADVANTAGE_PATTERNS = ["free", "no custody", "no fee", "no connectivity", "no dividend", "eur 0", "kosteloos", "€0", "geen"]
+_WARNING_PATTERNS = ["not disclosed", "surcharge", "max ", "min eur", "dormant", "debit interest", "late submission"]
 
-    Uses static translation labels instead of LLM. Falls back to English for
-    unknown languages.
+
+def _classify_note_category(sentence: str) -> str:
+    """Classify a sentence into a note category using keyword matching."""
+    lower = sentence.lower()
+    for category, keywords in _NOTE_CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in lower:
+                return category
+    return "other"
+
+
+def _classify_highlight(sentence: str) -> str:
+    """Classify a sentence's highlight: advantage, warning, or info."""
+    lower = sentence.lower()
+    for pattern in _WARNING_PATTERNS:
+        if pattern in lower:
+            return "warning"
+    for pattern in _ADVANTAGE_PATTERNS:
+        if pattern in lower:
+            return "advantage"
+    return "info"
+
+
+def _parse_notes_text(raw_notes: str) -> List[Dict[str, str]]:
+    """Parse a raw notes string into structured note items.
+
+    Splits on numbered items (e.g. '1) ...') or sentence boundaries ('. '),
+    then classifies each into category + highlight.
     """
-    from ..validation.fee_calculator import HIDDEN_COSTS, _build_broker_notes
-    if not HIDDEN_COSTS:
-        return _build_broker_notes()
+    import re
+    # Split on numbered items like "1) " or "2. " first
+    parts = re.split(r'\d+\)\s+', raw_notes)
+    # If no numbered items found, split on ". " (sentence boundaries)
+    if len(parts) <= 1:
+        parts = [s.strip() for s in raw_notes.split(". ") if s.strip()]
+    else:
+        # First element is empty string before "1)", filter it out
+        parts = [s.strip().rstrip(".") for s in parts if s.strip()]
 
-    labels = _NOTE_LABELS.get(lang, _NOTE_LABELS["en"])
-    notes = {}
+    items: List[Dict[str, str]] = []
+    seen_categories: set = set()
+    for part in parts:
+        if not part or len(part) < 5:
+            continue
+        category = _classify_note_category(part)
+        highlight = _classify_highlight(part)
+        # Clean up trailing period
+        description = part.rstrip(".")
+        items.append({
+            "category": category,
+            "label": _NOTE_LABELS["en"][category],
+            "description": description,
+            "highlight": highlight,
+        })
+        seen_categories.add(category)
+    return items
+
+
+def _build_structured_broker_notes() -> Dict[str, List[Dict[str, str]]]:
+    """Build structured broker notes from HiddenCosts data.
+
+    Returns a dict mapping broker display name to a list of structured note
+    items, each with category, label, description, and highlight.
+    """
+    from ..validation.fee_calculator import HIDDEN_COSTS
+
+    notes: Dict[str, List[Dict[str, str]]] = {}
 
     for broker_name, costs in HIDDEN_COSTS.items():
-        # If there's a raw notes string and lang is English, use it directly
-        if lang == "en" and costs.notes:
-            notes[broker_name] = costs.notes
-            continue
+        items: List[Dict[str, str]] = []
 
-        parts = []
-        if costs.custody_fee_monthly_pct > 0:
-            parts.append(f"{labels['custody']}: {costs.custody_fee_monthly_pct}%/{labels['month']} ({labels['min']} EUR{costs.custody_fee_monthly_min:.2f}/{labels['month']})")
-        if costs.connectivity_fee_per_exchange_year > 0:
-            parts.append(f"{labels['connectivity']}: EUR{costs.connectivity_fee_per_exchange_year:.2f}/{labels['exchange_year']}")
+        # 1. Build items from numeric HiddenCosts fields
+        if costs.custody_fee_monthly_pct == 0 and costs.custody_fee_monthly_min == 0:
+            items.append({"category": "custody", "label": "Custody fee", "description": "Free", "highlight": "advantage"})
+        elif costs.custody_fee_monthly_pct > 0:
+            desc = f"{costs.custody_fee_monthly_pct}%/month"
+            if costs.custody_fee_monthly_min > 0:
+                desc += f" (min EUR{costs.custody_fee_monthly_min:.2f}/month)"
+            items.append({"category": "custody", "label": "Custody fee", "description": desc, "highlight": "info"})
+
+        if costs.connectivity_fee_per_exchange_year == 0:
+            items.append({"category": "connectivity", "label": "Connectivity fee", "description": "Free", "highlight": "advantage"})
+        else:
+            desc = f"EUR{costs.connectivity_fee_per_exchange_year:.2f}/exchange/year"
+            if costs.connectivity_fee_max_pct_account > 0:
+                desc += f" (max {costs.connectivity_fee_max_pct_account}% of account)"
+            items.append({"category": "connectivity", "label": "Connectivity fee", "description": desc, "highlight": "info"})
+
         if costs.subscription_fee_monthly > 0:
-            parts.append(f"{labels['subscription']}: EUR{costs.subscription_fee_monthly:.2f}/{labels['month']}")
-        if costs.fx_fee_pct > 0:
-            parts.append(f"{labels['fx']}: {costs.fx_fee_pct}%")
-        if costs.dividend_fee_pct > 0:
-            parts.append(f"{labels['dividend_fee']}: {costs.dividend_fee_pct}%")
-        if not parts:
-            parts.append(labels["no_hidden"])
+            desc = f"EUR{costs.subscription_fee_monthly:.2f}/month"
+            if costs.subscription_plan_name:
+                desc = f"{costs.subscription_plan_name}: {desc}"
+            items.append({"category": "subscription", "label": "Subscription", "description": desc, "highlight": "info"})
 
-        notes[broker_name] = ". ".join(parts) + "."
+        if costs.fx_fee_pct == 0:
+            # Check if notes mention FX is "not disclosed" rather than truly free
+            notes_lower = costs.notes.lower() if costs.notes else ""
+            if "not disclosed" in notes_lower and ("fx" in notes_lower or "conversion" in notes_lower or "exchange" in notes_lower):
+                items.append({"category": "fx", "label": "FX fee", "description": "Not disclosed", "highlight": "warning"})
+            else:
+                items.append({"category": "fx", "label": "FX fee", "description": "Free", "highlight": "advantage"})
+        elif costs.fx_fee_pct > 0:
+            items.append({"category": "fx", "label": "FX fee", "description": f"{costs.fx_fee_pct}%", "highlight": "info"})
 
-    # Fallback statics for brokers with no hidden cost data
-    from ..validation.fee_calculator import _build_broker_notes as _build_en_notes
-    en_notes = _build_en_notes()
-    for name, note in en_notes.items():
-        if name not in notes:
-            notes[name] = note
+        if costs.handling_fee_per_trade > 0:
+            items.append({"category": "handling", "label": "Handling fee", "description": f"EUR{costs.handling_fee_per_trade:.2f}/trade", "highlight": "info"})
+
+        if costs.dividend_fee_pct == 0:
+            items.append({"category": "dividend", "label": "Dividend fee", "description": "Free", "highlight": "advantage"})
+        elif costs.dividend_fee_pct > 0:
+            desc = f"{costs.dividend_fee_pct}%"
+            if costs.dividend_fee_min > 0 or costs.dividend_fee_max > 0:
+                min_part = f"min EUR{costs.dividend_fee_min:.2f}" if costs.dividend_fee_min > 0 else ""
+                max_part = f"max EUR{costs.dividend_fee_max:.2f}" if costs.dividend_fee_max > 0 else ""
+                bounds = ", ".join(filter(None, [min_part, max_part]))
+                desc += f" ({bounds})"
+            items.append({"category": "dividend", "label": "Dividend fee", "description": desc, "highlight": "info"})
+
+        # 2. Parse raw notes string for additional items not captured above
+        if costs.notes:
+            numeric_categories = {item["category"] for item in items}
+            parsed = _parse_notes_text(costs.notes)
+            for parsed_item in parsed:
+                # Skip items whose category is already covered by numeric fields
+                if parsed_item["category"] in numeric_categories:
+                    continue
+                items.append(parsed_item)
+
+        notes[broker_name] = items
 
     return notes
+
+
+def _localize_structured_notes(
+    notes: Dict[str, List[Dict[str, str]]], lang: str
+) -> Dict[str, List[Dict[str, str]]]:
+    """Translate labels in structured notes to the target language."""
+    if lang == "en":
+        return notes
+    labels = _NOTE_LABELS.get(lang, _NOTE_LABELS["en"])
+    import copy
+    localized = copy.deepcopy(notes)
+    for broker_items in localized.values():
+        for item in broker_items:
+            cat = item.get("category", "other")
+            if cat in labels:
+                item["label"] = labels[cat]
+    return localized
 
 
 # ========================================================================================
@@ -1127,9 +1255,10 @@ def get_cost_comparison_tables(
     # Build fee tables deterministically (no LLM needed)
     result = build_comparison_tables(broker_names)
 
-    # Generate notes with localized labels (no LLM needed)
-    hidden_cost_notes = _build_localized_broker_notes(lang)
-    notes = {_get_display_name(name): hidden_cost_notes.get(_get_display_name(name), "") for name in broker_names}
+    # Generate structured notes with localized labels (no LLM needed)
+    structured_notes = _build_structured_broker_notes()
+    notes = {_get_display_name(name): structured_notes.get(_get_display_name(name), []) for name in broker_names}
+    notes = _localize_structured_notes(notes, lang)
     result["euronext_brussels"]["notes"] = notes
 
     # Add investor persona comparison
@@ -1351,13 +1480,11 @@ def _localize_cost_comparison_response(result: Dict[str, Any], lang: str) -> Dic
     if lang == "en":
         return localized
     
-    # Translate broker notes (hidden costs)
+    # Translate broker notes (structured array format)
     if "notes" in localized.get("euronext_brussels", {}):
-        notes = localized["euronext_brussels"]["notes"]
-        for broker_name in notes.keys():
-            # Rebuild notes from BROKER_NOTES static dictionary (which may have translations)
-            # For now, keep EN notes - full translation would require static/LLM translation layer
-            pass
+        localized["euronext_brussels"]["notes"] = _localize_structured_notes(
+            localized["euronext_brussels"]["notes"], lang
+        )
     
     # Translate calculation_logic explanations
     if "calculation_logic" in localized.get("euronext_brussels", {}):
@@ -1907,8 +2034,8 @@ def _warm_comparison_table_cache(broker_names: list, model: str) -> None:
     """
     result = build_comparison_tables(broker_names)
 
-    hidden_cost_notes = _build_localized_broker_notes("en")
-    notes = {_get_display_name(n): hidden_cost_notes.get(_get_display_name(n), "") for n in broker_names}
+    structured_notes = _build_structured_broker_notes()
+    notes = {_get_display_name(n): structured_notes.get(_get_display_name(n), []) for n in broker_names}
     result["euronext_brussels"]["notes"] = notes
 
     try:
