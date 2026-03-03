@@ -278,7 +278,7 @@ def find_cheapest_broker(instrument: str, amount: float) -> Tuple[Optional[str],
     cheapest_broker = None
     cheapest_cost = float('inf')
     
-    for (broker_key, instr_key), rule in FEE_RULES.items():
+    for (broker_key, instr_key, exch_key), rule in FEE_RULES.items():
         if instr_key != instrument.lower():
             continue
         
@@ -338,7 +338,7 @@ def find_cheapest_broker(instrument: str, amount: float) -> Tuple[Optional[str],
     cheapest_broker = None
     cheapest_cost = float('inf')
     
-    for (broker_key, instr_key), rule in FEE_RULES.items():
+    for (broker_key, instr_key, exch_key), rule in FEE_RULES.items():
         if instr_key != instrument.lower():
             continue
         

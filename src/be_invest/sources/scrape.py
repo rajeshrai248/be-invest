@@ -179,9 +179,10 @@ def scrape_fee_records(
 
             logger.debug("Fetching %s for %s: %s", 'PDF' if is_pdf else 'webpage', broker.name, ds.url)
 
-            # Always use Playwright for Revolut (bypasses bot detection)
-            if broker.name == "Revolut":
-                logger.info(f"Using Playwright for Revolut (bypasses bot detection)...")
+            # Use Playwright for brokers that need JS rendering or bot-detection bypass
+            _playwright_brokers = {"Revolut", "Trade Republic"}
+            if broker.name in _playwright_brokers:
+                logger.info(f"Using Playwright for {broker.name} (JS rendering / bot detection bypass)...")
                 raw_bytes, fetch_error = _fetch_url_with_playwright(ds.url, timeout)
             else:
                 raw_bytes, fetch_error = _fetch_url(ds.url, timeout=timeout)

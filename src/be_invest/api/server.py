@@ -2264,7 +2264,11 @@ Return a JSON object with EXACTLY this structure:
       "instrument": "stocks",
       "pattern": "pattern_type",
       "tiers": [...],
-      "handling_fee": 0.0
+      "handling_fee": 0.0,
+      "exchange": "all",
+      "conditions": [],
+      "notes": "",
+      "source": {{}}
     }}
   ],
   "hidden_costs": {{
@@ -2298,6 +2302,28 @@ TIER TYPES:
 - {{"per_slice": 10000, "fee": 15.00}} - per-started-slice (no up_to means it applies after all flat tiers)
 - {{"per_slice": 10000, "fee": 15.00, "max_fee": 50.00}} - per-slice with fee cap
 - {{"rate": 0.0035, "min_fee": 1.00}} - percentage rate with minimum
+
+EXCHANGE FIELD:
+- "all" (default) = applies to all exchanges
+- Use specific exchange names when pricing differs: "euronext_brussels", "nyse", "nasdaq", "xetra", "lse", "euronext_amsterdam", "euronext_paris"
+- Convention: lowercase, underscores, no spaces.
+- If the data only shows one fee schedule (no exchange differentiation), use "all".
+
+CONDITIONS FIELD (array of condition objects, empty [] for standard rates):
+- Age-based: {{"type": "age", "min_age": 18, "max_age": 24}} — e.g., youth discount
+- Plan-based: {{"type": "plan", "plan_name": "Plus", "plan_tier": "paid"}} — subscription tier pricing
+- Order type: {{"type": "order_type", "order_type": "phone"}} — phone order surcharge
+- Promotion: {{"type": "promotion", "promo_name": "Welcome", "valid_until": "2026-12-31"}}
+- Only add conditions for NON-STANDARD rules. The standard fee schedule should have conditions=[].
+- If a broker has both a standard rate AND a conditional rate, emit TWO separate rules.
+
+NOTES FIELD:
+- Brief free-text for edge cases or caveats not captured by conditions.
+- Leave empty ("") for straightforward rules.
+
+SOURCE FIELD:
+- Provenance metadata: {{"pdf": "filename.pdf", "page": 3}}
+- Leave empty ({{}}) if provenance is unknown.
 
 CRITICAL — TWO DIFFERENT NUMERIC CONVENTIONS ARE USED IN THE SAME JSON:
 
@@ -2355,8 +2381,12 @@ IMPORTANT:
                     handling_fee=rule_dict.get("handling_fee", 0.0),
                     min_fee=rule_dict.get("min_fee"),
                     max_fee=rule_dict.get("max_fee"),
+                    exchange=rule_dict.get("exchange", "all"),
+                    conditions=rule_dict.get("conditions", []),
+                    notes=rule_dict.get("notes", ""),
+                    source=rule_dict.get("source", {}),
                 )
-                all_rules[(broker.lower(), instrument.lower())] = rule
+                all_rules[(broker.lower(), instrument.lower(), rule.exchange.lower())] = rule
                 broker_rule_count += 1
 
             # Load hidden costs for this broker
@@ -2380,7 +2410,7 @@ IMPORTANT:
 
             # QA check: warn if any extracted rule produces 0 for all sizes
             from ..validation.fee_calculator import _compute_from_tiers, TRANSACTION_SIZES as TS
-            for (bk, ik), rule in list(all_rules.items()):
+            for (bk, ik, ek), rule in list(all_rules.items()):
                 if bk == broker_name.lower():
                     all_zero = all(
                         _compute_from_tiers(rule.tiers, amt, rule.handling_fee, rule.max_fee) == 0.0
@@ -2392,7 +2422,7 @@ IMPORTANT:
                             f"  QA WARNING: {rule.broker} {rule.instrument} extracted with all-zero fees. "
                             f"Tiers: {rule.tiers}. This rule will be skipped."
                         )
-                        del all_rules[(bk, ik)]
+                        del all_rules[(bk, ik, ek)]
                         broker_rule_count -= 1
 
             brokers_succeeded.append(broker_name)
@@ -2754,13 +2784,17 @@ def _build_chat_context() -> str:
     # Fee rules per broker/instrument
     lines.append("## Fee Rules")
     grouped: Dict[str, List[str]] = {}
-    for (broker_key, instr_key), rule in sorted(FEE_RULES.items()):
+    for (broker_key, instr_key, exch_key), rule in sorted(FEE_RULES.items()):
         display = _get_display_name(broker_key)
-        desc = f"  {instr_key}: pattern={rule.pattern}, tiers={rule.tiers}"
+        desc = f"  {instr_key} (exchange={exch_key}): pattern={rule.pattern}, tiers={rule.tiers}"
         if rule.handling_fee > 0:
             desc += f", handling=EUR{rule.handling_fee:.2f}"
         if rule.max_fee is not None:
             desc += f", max_fee=EUR{rule.max_fee:.2f}"
+        if rule.conditions:
+            desc += f", conditions={rule.conditions}"
+        if rule.notes:
+            desc += f", notes={rule.notes}"
         grouped.setdefault(display, []).append(desc)
 
     for broker_display, descs in sorted(grouped.items()):
@@ -2879,6 +2913,28 @@ def _precompute_fee_calculations(question: str) -> Optional[Dict[str, Any]]:
     if not instruments:
         instruments = ["stocks", "etfs"]  # default
 
+    # Detect exchange mentioned
+    EXCHANGE_KEYWORDS = {
+        "euronext brussels": "euronext_brussels",
+        "brussels": "euronext_brussels",
+        "euronext amsterdam": "euronext_amsterdam",
+        "amsterdam": "euronext_amsterdam",
+        "euronext paris": "euronext_paris",
+        "paris": "euronext_paris",
+        "nyse": "nyse",
+        "new york": "nyse",
+        "nasdaq": "nasdaq",
+        "xetra": "xetra",
+        "frankfurt": "xetra",
+        "lse": "lse",
+        "london": "lse",
+    }
+    detected_exchange = "all"
+    for keyword, exch in sorted(EXCHANGE_KEYWORDS.items(), key=lambda x: -len(x[0])):
+        if keyword in question_lower:
+            detected_exchange = exch
+            break
+
     # Compute fees
     results: Dict[str, Any] = {}
     for broker in found_brokers:
@@ -2886,9 +2942,9 @@ def _precompute_fee_calculations(question: str) -> Optional[Dict[str, Any]]:
         broker_results = {}
         for instrument in instruments:
             for amount in amounts:
-                fee = calculate_fee(broker, instrument, amount)
+                fee = calculate_fee(broker, instrument, amount, detected_exchange)
                 if fee is not None:
-                    explanation = generate_explanation(broker, instrument, amount)
+                    explanation = generate_explanation(broker, instrument, amount, detected_exchange)
                     key = f"{instrument}_EUR{int(amount)}"
                     broker_results[key] = {
                         "fee": fee,
@@ -2901,7 +2957,7 @@ def _precompute_fee_calculations(question: str) -> Optional[Dict[str, Any]]:
 
 
 CHAT_SYSTEM_PROMPT_TEMPLATE = """You are a helpful assistant specializing in Belgian broker fees and investment costs.
-You help users compare brokers on Euronext Brussels: Degiro Belgium, Bolero, Keytrade Bank, ING Self Invest, Rebel, and Revolut.
+You help users compare brokers on Euronext Brussels: Degiro Belgium, Bolero, Keytrade Bank, ING Self Invest, Rebel, Revolut, and Trade Republic.
 
 ## Data Context
 {context}

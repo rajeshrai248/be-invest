@@ -46,6 +46,10 @@ class FeeRule:
     handling_fee: float = 0.0
     min_fee: Optional[float] = None
     max_fee: Optional[float] = None
+    exchange: str = "all"              # "all" | "euronext_brussels" | "nyse" | ...
+    conditions: List[dict] = field(default_factory=list)
+    notes: str = ""
+    source: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -77,7 +81,7 @@ _rules_loaded_from_json = False
 
 def _register(broker: str, instrument: str, rule: FeeRule) -> None:
     """Register a fee rule in the global registry."""
-    FEE_RULES[(broker.lower(), instrument.lower())] = rule
+    FEE_RULES[(broker.lower(), instrument.lower(), rule.exchange.lower())] = rule
 
 
 def _compute_from_tiers(tiers: List[dict], amount: float, handling_fee: float = 0.0,
@@ -155,6 +159,8 @@ BROKER_ALIASES: Dict[str, str] = {
     "ing self invest": "ing self invest",
     "rebel": "rebel",
     "revolut": "revolut",
+    "trade republic": "trade republic",
+    "traderepublic": "trade republic",
 }
 
 
@@ -175,15 +181,20 @@ def _normalize_instrument(instrument: str) -> str:
     return instrument
 
 
-def calculate_fee(broker: str, instrument: str, amount: float) -> Optional[float]:
+def calculate_fee(broker: str, instrument: str, amount: float, exchange: str = "all") -> Optional[float]:
     """Compute exact fee for a broker/instrument/amount combination.
 
     Returns None if no rule exists for this combination.
     Result is rounded to 2 decimal places.
+    Lookup precedence: exact (broker, instrument, exchange) → fallback (broker, instrument, "all").
     """
     _ensure_rules_loaded()
-    key = (_normalize_broker(broker), _normalize_instrument(instrument))
-    rule = FEE_RULES.get(key)
+    norm_broker = _normalize_broker(broker)
+    norm_instr = _normalize_instrument(instrument)
+    norm_exch = exchange.lower().strip()
+    rule = FEE_RULES.get((norm_broker, norm_instr, norm_exch))
+    if rule is None and norm_exch != "all":
+        rule = FEE_RULES.get((norm_broker, norm_instr, "all"))
     if rule is None:
         return None
     fee = _compute_from_tiers(rule.tiers, amount, rule.handling_fee, rule.max_fee)
@@ -247,6 +258,10 @@ def load_fee_rules(path: Optional[Path] = None) -> Dict[tuple, FeeRule]:
             handling_fee=rule_dict.get("handling_fee", 0.0),
             min_fee=rule_dict.get("min_fee"),
             max_fee=rule_dict.get("max_fee"),
+            exchange=rule_dict.get("exchange", "all"),
+            conditions=rule_dict.get("conditions", []),
+            notes=rule_dict.get("notes", ""),
+            source=rule_dict.get("source", {}),
         )
         _register(rule.broker, rule.instrument, rule)
 
@@ -271,7 +286,7 @@ def load_fee_rules(path: Optional[Path] = None) -> Dict[tuple, FeeRule]:
     logger.info(f"Loaded {len(rules_list)} fee rules and {len(hidden_costs_data)} hidden cost entries from {path}")
 
     # QA check: warn if any rule produces 0 for ALL transaction sizes
-    for (broker_key, instr_key), rule in FEE_RULES.items():
+    for (broker_key, instr_key, exch_key), rule in FEE_RULES.items():
         all_zero = all(
             _compute_from_tiers(rule.tiers, amt, rule.handling_fee, rule.max_fee) == 0.0
             for amt in TRANSACTION_SIZES
@@ -304,18 +319,25 @@ def save_fee_rules(rules: Optional[Dict[tuple, FeeRule]] = None, path: Optional[
         path = _default_fee_rules_path()
 
     rules_list = []
-    for (_broker_key, _instr_key), rule in sorted(rules.items()):
+    for key, rule in sorted(rules.items()):
         rule_dict = {
             "broker": rule.broker,
             "instrument": rule.instrument,
             "pattern": rule.pattern,
             "tiers": rule.tiers,
             "handling_fee": rule.handling_fee,
+            "exchange": rule.exchange,
         }
         if rule.min_fee is not None:
             rule_dict["min_fee"] = rule.min_fee
         if rule.max_fee is not None:
             rule_dict["max_fee"] = rule.max_fee
+        if rule.conditions:
+            rule_dict["conditions"] = rule.conditions
+        if rule.notes:
+            rule_dict["notes"] = rule.notes
+        if rule.source:
+            rule_dict["source"] = rule.source
         rules_list.append(rule_dict)
 
     # Serialize hidden costs
@@ -344,7 +366,7 @@ def get_rules_diff(old_rules: Dict[tuple, FeeRule], new_rules: Dict[tuple, FeeRu
     all_keys = set(old_rules.keys()) | set(new_rules.keys())
 
     for key in sorted(all_keys):
-        broker_key, instr_key = key
+        broker_key, instr_key, exch_key = key
         old = old_rules.get(key)
         new = new_rules.get(key)
 
@@ -367,15 +389,19 @@ def get_rules_diff(old_rules: Dict[tuple, FeeRule], new_rules: Dict[tuple, FeeRu
 # EXPLANATION GENERATOR (generic, reads from rule structure)
 # ========================================================================================
 
-def generate_explanation(broker: str, instrument: str, amount: float) -> str:
+def generate_explanation(broker: str, instrument: str, amount: float, exchange: str = "all") -> str:
     """Generate human-readable fee calculation explanation from rule structure."""
     _ensure_rules_loaded()
-    key = (_normalize_broker(broker), _normalize_instrument(instrument))
-    rule = FEE_RULES.get(key)
+    norm_broker = _normalize_broker(broker)
+    norm_instr = _normalize_instrument(instrument)
+    norm_exch = exchange.lower().strip()
+    rule = FEE_RULES.get((norm_broker, norm_instr, norm_exch))
+    if rule is None and norm_exch != "all":
+        rule = FEE_RULES.get((norm_broker, norm_instr, "all"))
     if rule is None:
         return f"No fee rule for {broker} {instrument}"
 
-    expected = calculate_fee(broker, instrument, amount)
+    expected = calculate_fee(broker, instrument, amount, exchange)
     if expected is None:
         return f"No fee rule for {broker} {instrument}"
 
@@ -438,15 +464,19 @@ def generate_explanation(broker: str, instrument: str, amount: float) -> str:
     return f"Fee: EUR{expected:.2f}"
 
 
-def generate_methodology(broker: str, instrument: str) -> str:
+def generate_methodology(broker: str, instrument: str, exchange: str = "all") -> str:
     """Generate a concise fee formula description for a broker/instrument.
 
     Returns a one-line summary of the fee structure (not a per-amount calculation).
     Used for static methodology reference in email reports.
     """
     _ensure_rules_loaded()
-    key = (_normalize_broker(broker), _normalize_instrument(instrument))
-    rule = FEE_RULES.get(key)
+    norm_broker = _normalize_broker(broker)
+    norm_instr = _normalize_instrument(instrument)
+    norm_exch = exchange.lower().strip()
+    rule = FEE_RULES.get((norm_broker, norm_instr, norm_exch))
+    if rule is None and norm_exch != "all":
+        rule = FEE_RULES.get((norm_broker, norm_instr, "all"))
     if rule is None:
         return ""
 
@@ -507,6 +537,7 @@ _CANONICAL_NAMES: Dict[str, str] = {
     "ing self invest": "ING Self Invest",
     "rebel": "Rebel",
     "revolut": "Revolut",
+    "trade republic": "Trade Republic",
 }
 
 
@@ -516,8 +547,8 @@ def _get_display_name(broker: str) -> str:
     return _CANONICAL_NAMES.get(normalized, broker)
 
 
-def build_comparison_tables(broker_names: List[str]) -> dict:
-    """Build complete euronext_brussels comparison table structure.
+def build_comparison_tables(broker_names: List[str], exchange: str = "euronext_brussels") -> dict:
+    """Build complete comparison table structure for a given exchange.
 
     Returns dict with stocks/etfs/bonds fee matrices + calculation_logic.
     Notes field is left empty (populated by LLM or fallback separately).
@@ -540,16 +571,16 @@ def build_comparison_tables(broker_names: List[str]) -> dict:
             calc_asset = {}
 
             for amount in TRANSACTION_SIZES:
-                fee = calculate_fee(broker, asset_type, amount)
+                fee = calculate_fee(broker, asset_type, amount, exchange)
                 amount_str = str(amount)
                 if fee is not None:
                     fees[amount_str] = fee
-                    calc_asset[amount_str] = generate_explanation(broker, asset_type, amount)
+                    calc_asset[amount_str] = generate_explanation(broker, asset_type, amount, exchange)
 
             if fees:
                 target_dict[display] = fees
                 calc_broker[asset_type] = calc_asset
-                meth = generate_methodology(broker, asset_type)
+                meth = generate_methodology(broker, asset_type, exchange)
                 if meth:
                     meth_broker[asset_type] = meth
 
@@ -617,6 +648,7 @@ def _build_broker_notes() -> Dict[str, str]:
         "ING Self Invest": "Web rate 0.35%. Minimum EUR1.00. Currency exchange margins apply.",
         "Rebel": "No custody fees for Belgian stocks. Non-Belgian dividend collection fee. Part of Belfius.",
         "Revolut": "Standard plan (free): 0.25% commission, EUR1 min, 1 free trade/month. FX fees above monthly limits.",
+        "Trade Republic": "Flat EUR1 per trade for stocks, ETFs, bonds. Savings plans free. No custody or connectivity fees.",
     }
     for name, note in _STATIC_NOTES.items():
         if name not in notes:
