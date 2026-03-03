@@ -36,3 +36,6 @@ dist/
 .github/skills/refresh-local-cache-store/SKILL.md
 uv.lock
 data/issues/
+docs/be_invest_presentation.pptx
+scripts/build_presentation.py
+scripts/test_pptx.py
