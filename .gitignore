@@ -35,3 +35,4 @@ dist/
 /.idea/vcs.xml
 .github/skills/refresh-local-cache-store/SKILL.md
 uv.lock
+data/issues/

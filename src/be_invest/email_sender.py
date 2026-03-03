@@ -7,6 +7,7 @@ investor persona TCO rankings. Uses Gmail SMTP via stdlib smtplib only.
 import html
 import logging
 import os
+import re
 import smtplib
 import ssl
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ _BROKER_LOGO_DOMAINS: dict[str, str] = {
     "rebel": "belfius.be",
     "re=bel": "belfius.be",
     "revolut": "revolut.com",
+    "trade republic": "traderepublic.com",
 }
 
 _LOGO_SIZE = 20  # px
@@ -185,24 +187,9 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
     )
 
 
-def _fmt_pct(val: float, suffix: str = "") -> str:
-    """Format a percentage value, returning '—' if zero.
-
-    Values in fee_rules.json are stored as percentages (e.g. 0.25 means 0.25%).
-    """
-    return f"{val:.2f}%{suffix}" if val else "—"
-
-
-def _fmt_eur(val: float, suffix: str = "") -> str:
-    """Format a EUR value, returning '—' if zero."""
-    return f"€{val:.2f}{suffix}" if val else "—"
-
 
 def _render_methodology_block(methodology: dict, asset_type: str) -> str:
-    """Render fee formulas as an Outlook-only footnote block.
-
-    Wrapped in MSO conditional comments so only Outlook renders it.
-    Gmail/web users get tooltips via title attributes instead.
+    """Render fee calculation formulas as a footnote block.
 
     Args:
         methodology: {broker_name: {asset_type: "formula description", ...}, ...}
@@ -221,19 +208,99 @@ def _render_methodology_block(methodology: dict, asset_type: str) -> str:
         for broker, formula in entries.items()
     )
     return (
-        "<!--[if mso]>"
         '<div style="font-size:11px;color:#6b7280;margin:6px 0 20px;'
         "padding:12px 16px;background:#f9fafb;border-left:3px solid #FF6200;"
         'line-height:1.9;">'
         '<strong style="color:#374151;">How fees are calculated</strong><br>'
         f"{lines}"
         "</div>"
-        "<![endif]-->"
     )
 
 
-def _render_hidden_costs_table(hidden_costs: dict) -> str:
-    """Render a table of hidden / ongoing broker costs.
+_SKIP_NOTE = re.compile(
+    r'\b(card\b|ATM|cash balance|saveback|cash interest'
+    r'|debit interest|dormant account|post correspondence'
+    r'|administrative quer|general meeting certificate'
+    r'|bearer conversion|best effort order'
+    r'|nominee to bearer)',
+    re.IGNORECASE,
+)
+
+# Notes that state zero fees / no fees — not useful to show
+_ZERO_NOTE = re.compile(
+    r'^no\s+(custody|entry|exit|dossier|dividend|connectivity|subscription|management)'
+    r'|^no\s+\w+\s+(fee|cost|charge)s?\b'
+    r'|\bEUR\s*0[\s.,]|\b€\s*0[\s.,]|\bEUR\s*0$|\b€\s*0$'
+    r'|\bEUR\s+0\.00\b|\b€\s*0\.00\b'
+    r'|\bnot\s+retain\b|\bnot\s+disclosed\b'
+    r'|processing:\s*EUR\s*0',
+    re.IGNORECASE,
+)
+
+
+_HIGHLIGHT = re.compile(
+    r'('
+    # EUR/USD amounts: €1.00, EUR 2.50, $100, USD 50, or "1 EUR", "2.50 EUR"
+    r'(?:€|EUR\s?|USD\s?|\$)\d[\d,.]*(?:\s*%)?'
+    r'|\d[\d,.]*\s*(?:€|EUR|USD)\b'
+    # Percentages: 0.25%, 1.40%
+    r'|\d[\d,.]*\s*%'
+    # "free" / "no charge" / "waived" as standalone keywords
+    r'|\bfree\b|\bno charge\b|\bwaived\b'
+    # min/max clauses: "min EUR 1.00", "max 0.25%", "maximum €50"
+    r'|\b(?:min(?:imum)?|max(?:imum)?)\s+(?:€|EUR\s?|USD\s?|\$)?\d[\d,.]*(?:\s*%)?'
+    r')',
+    re.IGNORECASE,
+)
+
+
+def _highlight_note(text: str) -> str:
+    """Bold important financial figures in a note string.
+
+    Applies <strong> to EUR/USD amounts, percentages, free/waived keywords,
+    and min/max caps. Input must already be HTML-escaped.
+    """
+    return _HIGHLIGHT.sub(r'<strong>\1</strong>', text)
+
+
+def _split_notes(notes: str) -> list[str]:
+    """Split a notes string into individual bullet items.
+
+    Handles both numbered items ("1) ...", "2) ...") and plain sentences.
+    Filters out non-investment content.
+    """
+    if not notes:
+        return []
+    # Protect common abbreviations from sentence splitting
+    _ABBREVS = {'incl.': 'incl\x00', 'excl.': 'excl\x00',
+                'e.g.': 'e\x00g\x00', 'i.e.': 'i\x00e\x00',
+                'min.': 'min\x00', 'max.': 'max\x00'}
+    protected = notes
+    for abbr, placeholder in _ABBREVS.items():
+        protected = protected.replace(abbr, placeholder)
+
+    # Try splitting on numbered patterns like "1) " at boundaries
+    numbered = re.split(r'\s*\d+\)\s+', protected.strip())
+    if len(numbered) > 2:
+        items = [s.strip().rstrip('.') for s in numbered if s.strip()]
+    else:
+        # Fall back to sentence splitting
+        items = [s.strip().rstrip('.') for s in re.split(r'(?<=\.)\s+', protected.strip()) if s.strip()]
+
+    # Restore abbreviations
+    restored = []
+    for item in items:
+        for abbr, placeholder in _ABBREVS.items():
+            item = item.replace(placeholder, abbr)
+        restored.append(item)
+    return [
+        item for item in restored
+        if item and not _SKIP_NOTE.search(item) and not _ZERO_NOTE.search(item)
+    ]
+
+
+def _render_broker_notes(hidden_costs: dict) -> str:
+    """Render a broker notes section with investment-related notes as bullet lists.
 
     Args:
         hidden_costs: {broker_name: HiddenCosts dataclass or dict}
@@ -241,103 +308,39 @@ def _render_hidden_costs_table(hidden_costs: dict) -> str:
     if not hidden_costs:
         return ""
 
-    columns = [
-        ("Custody", "custody",
-         "Ongoing fee charged by the broker to hold your securities. "
-         "Usually a monthly percentage of your portfolio value, often with a minimum charge."),
-        ("Connectivity", "connectivity",
-         "Annual fee to access a specific stock exchange (e.g. Euronext Brussels, NYSE). "
-         "Some brokers waive this if you trade a minimum number of times."),
-        ("Subscription", "subscription",
-         "Fixed monthly platform or account fee, charged regardless of trading activity. "
-         "Common with brokers that offer premium tools or research."),
-        ("FX Fee", "fx",
-         "Currency conversion charge applied when you buy or sell instruments priced "
-         "in a foreign currency (e.g. USD stocks). Shown as a percentage of the converted amount."),
-        ("Handling/trade", "handling",
-         "A small fixed fee added on top of the transaction fee per trade. "
-         "Covers administrative processing costs."),
-        ("Dividend Fee", "dividend",
-         "Fee charged when a dividend is paid into your account. "
-         "Usually a percentage of the dividend amount, often with a minimum and maximum cap."),
-    ]
-
-    # Subscription (idx 2) and Handling (idx 4) hidden on mobile — less critical
-    _COST_MOB_HIDDEN = {2, 4}
-
-    header_cells = "".join(
-        f'<th class="hide-mob" title="{tip}">{label} <sup style="font-size:9px;opacity:0.75;">{i}</sup></th>'
-        if (i - 1) in _COST_MOB_HIDDEN else
-        f'<th title="{tip}">{label} <sup style="font-size:9px;opacity:0.75;">{i}</sup></th>'
-        for i, (label, _key, tip) in enumerate(columns, 1)
-    )
-    header = f"<tr><th>Broker</th>{header_cells}</tr>"
-
-    rows = []
+    blocks = []
     for broker, c in sorted(hidden_costs.items()):
-        # Accept both dataclass and plain dict
         g = c if isinstance(c, dict) else c.__dict__
-
-        custody = (
-            f"{g.get('custody_fee_monthly_pct', 0):.4f}%/mo"
-            + (f" (min {_fmt_eur(g.get('custody_fee_monthly_min', 0))})" if g.get('custody_fee_monthly_min') else "")
-            if g.get('custody_fee_monthly_pct') else "—"
-        )
-        connectivity = (
-            _fmt_eur(g.get('connectivity_fee_per_exchange_year', 0), "/exchange/yr")
-            if g.get('connectivity_fee_per_exchange_year') else "—"
-        )
-        sub_fee = g.get('subscription_fee_monthly', 0)
-        sub_plan = g.get('subscription_plan_name', '')
-        if sub_fee:
-            sub_label = f"{sub_plan}: " if sub_plan else ""
-            subscription = f"{sub_label}{_fmt_eur(sub_fee)}/mo"
-        else:
-            subscription = "—"
-        fx = _fmt_pct(g.get('fx_fee_pct', 0))
-        handling = (
-            _fmt_eur(g.get('handling_fee_per_trade', 0), "/trade")
-            if g.get('handling_fee_per_trade') else "—"
-        )
-        div_pct = g.get('dividend_fee_pct', 0)
-        div_min = g.get('dividend_fee_min', 0)
-        div_max = g.get('dividend_fee_max', 0)
-        if div_pct:
-            div_parts = [f"{div_pct:.2f}%"]
-            if div_min:
-                div_parts.append(f"min {_fmt_eur(div_min)}")
-            if div_max:
-                div_parts.append(f"max {_fmt_eur(div_max)}")
-            dividend = " / ".join(div_parts)
-        else:
-            dividend = "—"
-
-        notes = g.get('notes', '')
-        row_title = f' title="{html.escape(notes)}"' if notes else ""
-        cells = "".join(
-            f'<td class="hide-mob">{v}</td>' if col_idx in _COST_MOB_HIDDEN else f"<td>{v}</td>"
-            for col_idx, v in enumerate([custody, connectivity, subscription, fx, handling, dividend])
-        )
+        raw_notes = g.get('notes', '')
+        items = _split_notes(raw_notes)
+        if not items:
+            continue
         logo = _broker_logo_img(broker)
-        rows.append(f"<tr{row_title}><td>{logo}{broker}</td>{cells}</tr>")
+        bullets = "".join(
+            f'<li style="margin-bottom:4px;">{_highlight_note(html.escape(item))}</li>'
+            for item in items
+        )
+        blocks.append(
+            f'<div style="margin-bottom:20px;padding:16px 20px;background:#f9fafb;'
+            f'border-radius:8px;border-left:3px solid #FF6200;">'
+            f'<div style="font-weight:700;font-size:14px;color:#111827;margin-bottom:8px;">'
+            f'{logo}{html.escape(broker)}</div>'
+            f'<ul style="margin:0;padding-left:18px;font-size:12px;color:#374151;line-height:1.8;">'
+            f'{bullets}</ul>'
+            f'</div>'
+        )
 
-    footnote_items = "".join(
-        f'<span class="hide-mob"><strong>{i}. {label}:</strong> {tip}<br></span>'
-        if (i - 1) in _COST_MOB_HIDDEN else
-        f"<strong>{i}. {label}:</strong> {tip}<br>"
-        for i, (label, _key, tip) in enumerate(columns, 1)
-    )
+    if not blocks:
+        return ""
+
     return (
-        '<p class="section-eyebrow">Ongoing Costs</p>'
-        "<h3>Additional Costs Beyond Trading Fees</h3>"
+        '<a id="broker-notes"></a>'
+        '<p class="section-eyebrow">Broker Notes</p>'
+        "<h2>Key Investment-Related Notes</h2>"
         '<p class="table-note">'
-        "Recurring charges that apply regardless of trading activity. "
-        "Superscript numbers refer to the footnotes below the table. "
-        "Hover a column header (desktop) to preview its description.</p>"
-        f'<div class="table-wrap">'
-        f"<table><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
-        f"</div>"
-        f'<div class="footnotes">{footnote_items}</div>'
+        "Important details about fees, promotions, and conditions "
+        "that may affect your investment costs.</p>"
+        + "".join(blocks)
     )
 
 
@@ -446,7 +449,9 @@ def build_email_html(tables_data: dict) -> str:
     fee_section = (
         '<h2>Transaction Fees by Investment Amount</h2>'
         f'<p class="table-note">All amounts in EUR. Fees are deterministic and rule-based. '
-        f"{cheapest_badge} = cheapest broker for that amount.</p>"
+        f"{cheapest_badge} = cheapest broker for that amount. "
+        f'See <a href="#broker-notes" style="color:#FF6200;font-weight:600;">'
+        f'Broker Notes</a> below for additional fees, conditions, and promotions.</p>'
         + _render_fee_table(
             "Stocks \u2014 Euronext Brussels, Amsterdam & Paris",
             all_stocks,
@@ -459,7 +464,7 @@ def build_email_html(tables_data: dict) -> str:
             etfs_logic,
         )
         + _render_methodology_block(all_methodology, "etfs")
-        + _render_hidden_costs_table(hidden_costs)
+        + _render_broker_notes(hidden_costs)
     )
 
     html = f"""<!DOCTYPE html>
@@ -490,7 +495,7 @@ def build_email_html(tables_data: dict) -> str:
   </div>
   <div class="footer">
     Generated on {now_str}.<br>
-    Fees are based on published tariff schedules and may change — always verify with your broker.<br><br>
+    Fees sourced from published tariff schedules as of the report date.<br><br>
     Full comparisons, live data, and personalised cost analysis at
     <a href="https://rajeshrai248.uk">rajeshrai248.uk</a><br>
     <span style="font-size:10px;color:#c0c4cc;">
