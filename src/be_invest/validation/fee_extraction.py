@@ -150,9 +150,9 @@ IMPORTANT:
   Example: subscription_fee_monthly=2.99, subscription_plan_name="Plus".
 
 COMMON LLM EXTRACTION ERRORS TO AVOID:
-- Keytrade Bank: stocks and ETFs/trackers have DIFFERENT fee tiers on Euronext Brussels.
-  Stocks use higher fees (~EUR17/21/30) while trackers/ETFs use lower fees (~EUR2.45/5.95/14.95).
-  Do NOT copy the tracker/ETF tiers into the stocks rule! They are separate instruments.
+- Keytrade Bank: stocks and ETFs/trackers have the SAME fee tiers on Euronext Brussels.
+  Both use: EUR2.45 (0-250), EUR5.95 (250-2500), EUR14.95 (2500-10000), +EUR7.50 per additional EUR10000.
+  The PDF confirms: "Trackers - Transactions at the same fee as for stock market transactions".
 - Rebel: The standard stock fee on Euronext Brussels is EUR3 (up to EUR2500), then EUR10 per
   started EUR10000 slice. Do NOT confuse this with the youth (age 18-24) discount of EUR1 flat.
   Always extract the STANDARD rule (conditions=[]) separately from conditional rules.
@@ -321,7 +321,7 @@ def sanitize_extracted_rules(
 EURONEXT_BRUSSELS_REFERENCE: Dict[str, Dict[str, Dict[int, float]]] = {
     "stocks": {
         "Bolero": {50: 2.5, 100: 2.5, 250: 2.5, 500: 5.0, 1000: 5.0, 1500: 7.5, 2000: 7.5, 2500: 7.5, 5000: 15.0, 10000: 15.0, 50000: 50.0},
-        "Keytrade Bank": {50: 17.45, 100: 17.45, 250: 17.45, 500: 20.95, 1000: 20.95, 1500: 20.95, 2000: 20.95, 2500: 20.95, 5000: 29.95, 10000: 29.95, 50000: 45.0},
+        "Keytrade Bank": {50: 2.45, 100: 2.45, 250: 2.45, 500: 5.95, 1000: 5.95, 1500: 5.95, 2000: 5.95, 2500: 5.95, 5000: 14.95, 10000: 14.95, 50000: 44.95},
         "Degiro Belgium": {50: 3.0, 100: 3.0, 250: 3.0, 500: 3.0, 1000: 3.0, 1500: 3.0, 2000: 3.0, 2500: 3.0, 5000: 3.0, 10000: 3.0, 50000: 3.0},
         "ING Self Invest": {50: 1.0, 100: 1.0, 250: 1.0, 500: 1.75, 1000: 3.5, 1500: 5.25, 2000: 7.0, 2500: 8.75, 5000: 17.5, 10000: 35.0, 50000: 175.0},
         "Rebel": {50: 3.0, 100: 3.0, 250: 3.0, 500: 3.0, 1000: 3.0, 1500: 3.0, 2000: 3.0, 2500: 3.0, 5000: 10.0, 10000: 10.0, 50000: 50.0},
@@ -349,16 +349,14 @@ EURONEXT_BRUSSELS_REFERENCE: Dict[str, Dict[str, Dict[int, float]]] = {
 # Known-correct fee rules for Euronext Brussels — used to auto-correct LLM errors.
 EURONEXT_BRUSSELS_CORRECT_RULES: Dict[tuple, dict] = {
     ("Keytrade Bank", "stocks", "euronext_brussels"): {
-        "pattern": "tiered_flat_then_slice",
+        "pattern": "tiered_flat_then_base_plus_slice",
         "tiers": [
-            {"up_to": 250, "fee": 17.45},
-            {"up_to": 2500, "fee": 20.95},
-            {"up_to": 10000, "fee": 29.95},
-            {"per_slice": 10000, "fee": 7.5},
-            {"rate": 0.0009},
+            {"up_to": 250, "fee": 2.45},
+            {"up_to": 2500, "fee": 5.95},
+            {"base_up_to": 10000, "base_fee": 14.95, "per_slice": 10000, "slice_fee": 7.50},
         ],
         "handling_fee": 0.0,
-        "notes": "Online orders on Euronext Brussels. Stocks have different tiers than ETFs/trackers. Above EUR10K: 0.09% x order amount.",
+        "notes": "Online orders on Euronext Brussels. Same tiers as ETFs/trackers. Flat tiers up to EUR10000, then EUR14.95 base + EUR7.50 per additional started EUR10000 slice.",
     },
     ("Keytrade Bank", "etfs", "euronext_brussels"): {
         "pattern": "tiered_flat_then_base_plus_slice",
