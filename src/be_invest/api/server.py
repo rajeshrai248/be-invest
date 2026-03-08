@@ -39,6 +39,11 @@ from ..validation.fee_calculator import (
     calculate_fee, generate_explanation, BROKER_ALIASES, _ensure_rules_loaded,
 )
 from ..validation.persona_calculator import build_persona_comparison
+from ..validation.fee_extraction import (
+    build_extraction_prompt,
+    parse_llm_extraction_response,
+    validate_and_fix_extraction,
+)
 
 # ========================================================================================
 # PYDANTIC MODELS
@@ -2316,6 +2321,13 @@ Return ONLY a valid JSON object with structured fee data.
         old_rules = dict(FEE_RULES)
         new_rules = _extract_fee_rules_from_cost_data(all_analyses, model)
         if new_rules:
+            # Validate and auto-correct LLM extraction errors against golden reference
+            new_rules, fix_count, validation_warnings = validate_and_fix_extraction(new_rules, HIDDEN_COSTS)
+            for w in validation_warnings:
+                logger.warning(f"Extraction validation: {w}")
+            if fix_count > 0:
+                logger.warning(f"Applied {fix_count} auto-corrections to LLM-extracted rules")
+
             fee_rules_diff = get_rules_diff(old_rules, new_rules)
             if fee_rules_diff:
                 logger.info(f"Fee rules changed: {fee_rules_diff}")
@@ -2388,167 +2400,20 @@ def _extract_fee_rules_from_cost_data(cost_data: Dict[str, Any], model: str) -> 
 
         logger.info(f"Extracting fee rules for {broker_name}...")
 
-        user_prompt = f"""Extract ALL fee rules and hidden costs for {broker_name} on Euronext Brussels.
-
-Extract:
-1. TRADING RULES: The exact fee structure with pattern type and all tier thresholds
-2. HIDDEN COSTS: Custody fees, connectivity fees, FX fees, dividend fees, subscription fees
-
-Input data for {broker_name}:
-{json.dumps(broker_data, indent=2)}
-
-Return a JSON object with EXACTLY this structure:
-
-{{
-  "rules": [
-    {{
-      "broker": "{broker_name}",
-      "instrument": "stocks",
-      "pattern": "pattern_type",
-      "tiers": [...],
-      "handling_fee": 0.0,
-      "exchange": "all",
-      "conditions": [],
-      "notes": "",
-      "source": {{}}
-    }}
-  ],
-  "hidden_costs": {{
-    "{broker_name}": {{
-      "custody_fee_monthly_pct": 0.0,
-      "custody_fee_monthly_min": 0.0,
-      "connectivity_fee_per_exchange_year": 0.0,
-      "connectivity_fee_max_pct_account": 0.0,
-      "subscription_fee_monthly": 0.0,
-      "subscription_plan_name": "",
-      "fx_fee_pct": 0.0,
-      "handling_fee_per_trade": 0.0,
-      "dividend_fee_pct": 0.0,
-      "dividend_fee_min": 0.0,
-      "dividend_fee_max": 0.0,
-      "notes": "Brief description of hidden costs"
-    }}
-  }}
-}}
-
-PATTERN TYPES (use exactly these strings):
-- "flat": Simple flat fee for all amounts (e.g., Degiro EUR2 + EUR1 handling)
-- "tiered_flat": Multiple flat fee tiers by amount (only up_to tiers, no slice)
-- "tiered_flat_then_slice": Flat tiers for small amounts, per-slice for larger amounts (Bolero, Keytrade, Rebel)
-- "percentage_with_min": Percentage rate with minimum fee (ING, Revolut)
-- "base_plus_slice": Single base fee threshold + per-slice for remainder
-
-TIER TYPES:
-- {{"flat": 2.00}} - simple flat fee
-- {{"up_to": 2500, "fee": 7.50}} - flat fee for amounts up to threshold
-- {{"per_slice": 10000, "fee": 15.00}} - per-started-slice (no up_to means it applies after all flat tiers)
-- {{"per_slice": 10000, "fee": 15.00, "max_fee": 50.00}} - per-slice with fee cap
-- {{"rate": 0.0035, "min_fee": 1.00}} - percentage rate with minimum
-
-EXCHANGE FIELD:
-- "all" (default) = applies to all exchanges
-- Use specific exchange names when pricing differs: "euronext_brussels", "nyse", "nasdaq", "xetra", "lse", "euronext_amsterdam", "euronext_paris"
-- Convention: lowercase, underscores, no spaces.
-- If the data only shows one fee schedule (no exchange differentiation), use "all".
-
-CONDITIONS FIELD (array of condition objects, empty [] for standard rates):
-- Age-based: {{"type": "age", "min_age": 18, "max_age": 24}} — e.g., youth discount
-- Plan-based: {{"type": "plan", "plan_name": "Plus", "plan_tier": "paid"}} — subscription tier pricing
-- Order type: {{"type": "order_type", "order_type": "phone"}} — phone order surcharge
-- Promotion: {{"type": "promotion", "promo_name": "Welcome", "valid_until": "2026-12-31"}}
-- Only add conditions for NON-STANDARD rules. The standard fee schedule should have conditions=[].
-- If a broker has both a standard rate AND a conditional rate, emit TWO separate rules.
-
-NOTES FIELD:
-- Brief free-text for edge cases or caveats not captured by conditions.
-- Leave empty ("") for straightforward rules.
-
-SOURCE FIELD:
-- Provenance metadata: {{"pdf": "filename.pdf", "page": 3}}
-- Leave empty ({{}}) if provenance is unknown.
-
-CRITICAL — TWO DIFFERENT NUMERIC CONVENTIONS ARE USED IN THE SAME JSON:
-
-1. TIER "rate" fields (inside the "tiers" array) use DECIMAL FRACTIONS:
-   The calculator does: fee = amount * rate — so rate must be a decimal fraction.
-   - rate: 0.0035 means 0.35% commission
-   - rate: 0.0025 means 0.25% commission
-   - rate: 0.005  means 0.50% commission
-   - WRONG: rate=0.35 for a 0.35% fee. RIGHT: rate=0.0035 for a 0.35% fee.
-   - WRONG: rate=0.25 for a 0.25% fee. RIGHT: rate=0.0025 for a 0.25% fee.
-
-2. "_pct" fields in "hidden_costs" use PERCENTAGE NOTATION (NOT decimal fractions):
-   - fx_fee_pct: 0.25 means 0.25%, NOT 25%. A value of 1.0 means 1%. A value of 1.40 means 1.40%.
-   - custody_fee_monthly_pct: 0.0242 means 0.0242% per month. A value of 2.0 means 2% per month.
-   - dividend_fee_pct: 2.42 means 2.42%. A value of 2.0 means 2%. Do NOT write 0.02 to mean 2%.
-   - connectivity_fee_max_pct_account follows the same rule.
-   - WRONG: dividend_fee_pct=0.02 for a 2% fee. RIGHT: dividend_fee_pct=2.0 for a 2% fee.
-   - WRONG: fx_fee_pct=0.0025 for a 0.25% fee. RIGHT: fx_fee_pct=0.25 for a 0.25% fee.
-
-IMPORTANT:
-- Extract ALL tiers from the data. Many brokers have 4-5 tiers, not just 2.
-- Include "max_fee" on the per_slice tier if the broker caps total commission.
-- Include rules for stocks, etfs, AND bonds where the data is available.
-- Use exact broker name: {broker_name}
-- Extract the STANDARD fee schedule, not promotional or conditional rates.
-  For example, Degiro has a "Core Selection" of ETFs with zero commission, but
-  the standard ETF fee on Euronext Brussels is EUR2 + EUR1 handling (same as stocks).
-  Always use the standard/default rate that applies to ALL instruments of that type.
-- A rule where ALL fees are EUR 0.00 is almost certainly wrong. If fees appear
-  to be zero, double-check whether a separate handling fee or commission applies.
-- For brokers with SUBSCRIPTION-BASED pricing (e.g., monthly plans that include a number
-  of free trades): set subscription_fee_monthly to the lowest PAID tier price (not the
-  free/basic plan), and set subscription_plan_name to the name of that entry-level paid plan
-  (e.g. "Plus", "Premium", "Pro"). Document ALL subscription tiers and what they include
-  (free trades, FX limits, etc.) in the notes field.
-  Example: subscription_fee_monthly=2.99, subscription_plan_name="Plus".
-"""
+        user_prompt = build_extraction_prompt(broker_name, broker_data)
 
         try:
             response_text = _call_llm(model, system_prompt, user_prompt, response_format="json")
-            data = json.loads(response_text)
-            rules_list = data.get("rules", [])
+            parsed_rules, parsed_hidden = parse_llm_extraction_response(response_text)
 
             broker_rule_count = 0
-            for rule_dict in rules_list:
-                broker = rule_dict.get("broker", "")
-                instrument = rule_dict.get("instrument", "")
-                if not broker or not instrument:
-                    continue
-                rule = FeeRule(
-                    broker=broker,
-                    instrument=instrument,
-                    pattern=rule_dict.get("pattern", "unknown"),
-                    tiers=rule_dict.get("tiers", []),
-                    handling_fee=rule_dict.get("handling_fee", 0.0),
-                    min_fee=rule_dict.get("min_fee"),
-                    max_fee=rule_dict.get("max_fee"),
-                    exchange=rule_dict.get("exchange", "all"),
-                    conditions=rule_dict.get("conditions", []),
-                    notes=rule_dict.get("notes", ""),
-                    source=rule_dict.get("source", {}),
-                )
-                all_rules[(broker.lower(), instrument.lower(), rule.exchange.lower())] = rule
+            for rule in parsed_rules:
+                all_rules[(rule.broker.lower(), rule.instrument.lower(), rule.exchange.lower())] = rule
                 broker_rule_count += 1
 
             # Load hidden costs for this broker
-            hidden_costs_data = data.get("hidden_costs", {})
-            for hc_name, costs_dict in hidden_costs_data.items():
-                if isinstance(costs_dict, dict):
-                    HIDDEN_COSTS[hc_name] = HiddenCosts(
-                        custody_fee_monthly_pct=costs_dict.get("custody_fee_monthly_pct", 0.0),
-                        custody_fee_monthly_min=costs_dict.get("custody_fee_monthly_min", 0.0),
-                        connectivity_fee_per_exchange_year=costs_dict.get("connectivity_fee_per_exchange_year", 0.0),
-                        connectivity_fee_max_pct_account=costs_dict.get("connectivity_fee_max_pct_account", 0.0),
-                        subscription_fee_monthly=costs_dict.get("subscription_fee_monthly", 0.0),
-                        subscription_plan_name=costs_dict.get("subscription_plan_name", ""),
-                        fx_fee_pct=costs_dict.get("fx_fee_pct", 0.0),
-                        handling_fee_per_trade=costs_dict.get("handling_fee_per_trade", 0.0),
-                        dividend_fee_pct=costs_dict.get("dividend_fee_pct", 0.0),
-                        dividend_fee_min=costs_dict.get("dividend_fee_min", 0.0),
-                        dividend_fee_max=costs_dict.get("dividend_fee_max", 0.0),
-                        notes=costs_dict.get("notes", ""),
-                    )
+            for hc_name, hc in parsed_hidden.items():
+                HIDDEN_COSTS[hc_name] = hc
 
             # QA check: warn if any extracted rule produces 0 for all sizes
             from ..validation.fee_calculator import _compute_from_tiers, TRANSACTION_SIZES as TS

@@ -304,6 +304,12 @@ def _sanitize_tiers(tiers: List[dict]) -> List[dict]:
             if key in seen_slice_sizes:
                 continue  # duplicate — skip
             seen_slice_sizes.add(key)
+        # Defense-in-depth: warn if rate looks like percentage notation instead of decimal fraction
+        if "rate" in t and t["rate"] > 0.05:
+            logger.warning(
+                f"Suspicious rate={t['rate']} in tier (>0.05 — likely percentage notation, "
+                f"not decimal fraction). Expected decimal: e.g., 0.0035 for 0.35%%. Tier: {t}"
+            )
         cleaned.append(t)
     return cleaned
 
