@@ -127,3 +127,23 @@ brokers:
         allowed_to_scrape: false
         description: "Revolut News"
         notes: "Disabled - returns junk data"
+  - name: Trade Republic
+    website: https://traderepublic.com/en-be/
+    country: Belgium
+    instruments:
+      - Equities
+      - ETFs
+      - Bonds
+      - Crypto
+    data_sources:
+      - type: webpage
+        description: Pricing overview (Belgium)
+        url: https://traderepublic.com/nl-be/prijzen
+        allowed_to_scrape: false
+        notes: "Flat EUR1 per trade for stocks, ETFs, bonds. Savings plans are free. No custody/connectivity fees."
+    news_sources:
+      - url: https://traderepublic.com/en-be/about
+        type: webpage
+        allowed_to_scrape: false
+        description: "Trade Republic Press / About"
+        notes: "No dedicated blog — press releases at assets.traderepublic.com"

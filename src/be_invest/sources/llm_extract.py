@@ -359,42 +359,41 @@ def extract_fee_records_via_llm(
         try:
             logger.debug(f"🚀 Sending request to {provider.upper()} {model}...")
 
-            with langfuse_context.observe(name=f"chunk-{idx}", as_type="generation") as chunk_obs:
-                langfuse_context.update_current_observation(
-                    model=model,
-                    input={"system": system_prompt[:500], "user_length": len(user_prompt)},
-                    metadata={"broker": broker, "chunk_index": idx, "chunk_length": len(focused_text)},
-                )
+            langfuse_context.update_current_observation(
+                model=model,
+                input={"system": system_prompt[:500], "user_length": len(user_prompt)},
+                metadata={"broker": broker, "chunk_index": idx, "chunk_length": len(focused_text)},
+            )
 
-                if provider == "anthropic":
-                    resp = client.messages.create(
-                        model=model,
-                        system=system_prompt,
-                        messages=[{"role": "user", "content": user_prompt}],
-                        temperature=temperature,
-                        max_tokens=max_output_tokens,
-                    )
-                    content = resp.content[0].text if resp.content else ""
-                    logger.debug(f"✅ Anthropic response received: {len(content)} chars")
+            if provider == "anthropic":
+                resp = client.messages.create(
+                    model=model,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    temperature=temperature,
+                    max_tokens=max_output_tokens,
+                )
+                content = resp.content[0].text if resp.content else ""
+                logger.debug(f"✅ Anthropic response received: {len(content)} chars")
+                langfuse_context.update_current_observation(
+                    output=content,
+                    usage={"input": resp.usage.input_tokens, "output": resp.usage.output_tokens},
+                )
+            else:  # openai
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_output_tokens,
+                    response_format={"type": "json_object"} if "json" in model else None,
+                )
+                content = resp.choices[0].message.content if resp.choices else ""
+                logger.debug(f"✅ OpenAI response received: {len(content)} chars")
+                if resp.usage:
                     langfuse_context.update_current_observation(
                         output=content,
-                        usage={"input": resp.usage.input_tokens, "output": resp.usage.output_tokens},
+                        usage={"input": resp.usage.prompt_tokens, "output": resp.usage.completion_tokens},
                     )
-                else:  # openai
-                    resp = client.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_output_tokens,
-                        response_format={"type": "json_object"} if "json" in model else None,
-                    )
-                    content = resp.choices[0].message.content if resp.choices else ""
-                    logger.debug(f"✅ OpenAI response received: {len(content)} chars")
-                    if resp.usage:
-                        langfuse_context.update_current_observation(
-                            output=content,
-                            usage={"input": resp.usage.prompt_tokens, "output": resp.usage.completion_tokens},
-                        )
 
             # Debug: Log response structure (first part only)
             logger.debug(f"\n📤 LLM RESPONSE PREVIEW:")

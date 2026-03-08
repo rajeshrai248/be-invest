@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mxfile host="app.diagrams.net" version="21.0.0">
   <diagram id="current-arch" name="be-invest Current Architecture">
-    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="960" math="0" shadow="0">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1400" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
         <!-- TITLE -->
-        <mxCell id="title" value="be-invest Platform — Current Architecture HLD" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=26;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="200" y="10" width="1800" height="50" as="geometry" />
+        <mxCell id="title" value="be-invest Platform — Business Architecture Overview" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=26;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="20" width="2000" height="50" as="geometry" />
         </mxCell>
 
         <!-- ============================================================ -->
@@ -16,52 +16,52 @@
         <!-- ============================================================ -->
 
         <mxCell id="bg_client" value="" style="rounded=1;fillColor=#BBDEFB;strokeColor=#1565C0;strokeWidth=3;" vertex="1" parent="1">
-          <mxGeometry x="20" y="68" width="2160" height="100" as="geometry" />
+          <mxGeometry x="20" y="90" width="2360" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_client" value="CLIENT LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#1565C0;" vertex="1" parent="1">
-          <mxGeometry x="34" y="74" width="200" height="24" as="geometry" />
+        <mxCell id="lbl_client" value="USER INTERFACE &amp; ACCESS" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#1565C0;" vertex="1" parent="1">
+          <mxGeometry x="34" y="96" width="200" height="24" as="geometry" />
         </mxCell>
 
         <mxCell id="bg_api" value="" style="rounded=1;fillColor=#C8E6C9;strokeColor=#2E7D32;strokeWidth=3;" vertex="1" parent="1">
-          <mxGeometry x="20" y="178" width="2160" height="92" as="geometry" />
+          <mxGeometry x="20" y="220" width="2360" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_api" value="API LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#2E7D32;" vertex="1" parent="1">
-          <mxGeometry x="34" y="184" width="200" height="24" as="geometry" />
+        <mxCell id="lbl_api" value="INTEGRATION &amp; REQUEST HANDLING" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#2E7D32;" vertex="1" parent="1">
+          <mxGeometry x="34" y="226" width="200" height="24" as="geometry" />
         </mxCell>
 
         <mxCell id="bg_endpoints" value="" style="rounded=1;fillColor=#FFE0B2;strokeColor=#E65100;strokeWidth=3;" vertex="1" parent="1">
-          <mxGeometry x="20" y="280" width="2160" height="152" as="geometry" />
+          <mxGeometry x="20" y="350" width="2360" height="180" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_endpoints" value="API ENDPOINTS" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#E65100;" vertex="1" parent="1">
-          <mxGeometry x="34" y="286" width="220" height="24" as="geometry" />
+        <mxCell id="lbl_endpoints" value="CORE CAPABILITIES" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#E65100;" vertex="1" parent="1">
+          <mxGeometry x="34" y="356" width="220" height="24" as="geometry" />
         </mxCell>
 
         <mxCell id="bg_business" value="" style="rounded=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;strokeWidth=3;" vertex="1" parent="1">
-          <mxGeometry x="20" y="442" width="2160" height="148" as="geometry" />
+          <mxGeometry x="20" y="560" width="2360" height="160" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_business" value="BUSINESS LOGIC LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#6A1B9A;" vertex="1" parent="1">
-          <mxGeometry x="34" y="448" width="280" height="24" as="geometry" />
+        <mxCell id="lbl_business" value="CALCULATION &amp; ANALYSIS ENGINE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#6A1B9A;" vertex="1" parent="1">
+          <mxGeometry x="34" y="566" width="280" height="24" as="geometry" />
         </mxCell>
 
         <mxCell id="bg_llm" value="" style="rounded=1;fillColor=#FFCDD2;strokeColor=#B71C1C;strokeWidth=3;" vertex="1" parent="1">
-          <mxGeometry x="20" y="600" width="2160" height="162" as="geometry" />
+          <mxGeometry x="20" y="750" width="2360" height="180" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_llm" value="LLM SERVICES LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#B71C1C;" vertex="1" parent="1">
-          <mxGeometry x="34" y="606" width="280" height="24" as="geometry" />
+        <mxCell id="lbl_llm" value="INTELLIGENT PROCESSING" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#B71C1C;" vertex="1" parent="1">
+          <mxGeometry x="34" y="756" width="280" height="24" as="geometry" />
         </mxCell>
 
         <mxCell id="bg_data" value="" style="rounded=1;fillColor=#CFD8DC;strokeColor=#37474F;strokeWidth=3;" vertex="1" parent="1">
-          <mxGeometry x="20" y="772" width="1058" height="128" as="geometry" />
+          <mxGeometry x="20" y="960" width="1150" height="150" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_data" value="DATA LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#37474F;" vertex="1" parent="1">
-          <mxGeometry x="34" y="778" width="200" height="24" as="geometry" />
+        <mxCell id="lbl_data" value="DATA &amp; INFORMATION" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#37474F;" vertex="1" parent="1">
+          <mxGeometry x="34" y="966" width="200" height="24" as="geometry" />
         </mxCell>
 
         <mxCell id="bg_obs" value="" style="rounded=1;fillColor=#B2DFDB;strokeColor=#004D40;strokeWidth=3;" vertex="1" parent="1">
-          <mxGeometry x="1102" y="772" width="1078" height="128" as="geometry" />
+          <mxGeometry x="1190" y="960" width="1190" height="150" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_obs" value="OBSERVABILITY &amp; EVALUATION LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#004D40;" vertex="1" parent="1">
-          <mxGeometry x="1116" y="778" width="420" height="24" as="geometry" />
+        <mxCell id="lbl_obs" value="QUALITY ASSURANCE &amp; INSIGHTS" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#004D40;" vertex="1" parent="1">
+          <mxGeometry x="1204" y="966" width="420" height="24" as="geometry" />
         </mxCell>
 
         <!-- ============================================================ -->
@@ -69,123 +69,123 @@
         <!-- ============================================================ -->
 
         <!-- CLIENT -->
-        <mxCell id="client" value="&lt;b&gt;Browser / API Consumer&lt;/b&gt;&lt;br&gt;&lt;br&gt;REST Client  ·  Swagger UI  ·  Frontend Application" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1565C0;strokeColor=#0D47A1;fontColor=#ffffff;fontSize=14;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="640" y="84" width="920" height="68" as="geometry" />
+        <mxCell id="client" value="&lt;b&gt;Investor Interface&lt;/b&gt;&lt;br&gt;&lt;br&gt;Web Application · Mobile · API Integration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1565C0;strokeColor=#0D47A1;fontColor=#ffffff;fontSize=14;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="650" y="106" width="1100" height="68" as="geometry" />
         </mxCell>
 
         <!-- FASTAPI -->
-        <mxCell id="fastapi" value="&lt;b&gt;FastAPI Server&lt;/b&gt;   —   src/be_invest/api/server.py   |   Async Python   |   Langfuse tracing on all endpoints   |   Non-blocking LLM-judge submission (background thread)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2E7D32;strokeColor=#1B5E20;fontColor=#ffffff;fontSize=13;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="40" y="194" width="2120" height="64" as="geometry" />
+        <mxCell id="fastapi" value="&lt;b&gt;Request Processing Center&lt;/b&gt;   —   Handles all investor requests · Ensures fast response times · Tracks all activities" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2E7D32;strokeColor=#1B5E20;fontColor=#ffffff;fontSize=13;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="236" width="2320" height="70" as="geometry" />
         </mxCell>
 
         <!-- ENDPOINTS -->
-        <mxCell id="ep_cost" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/cost-comparison-tables&lt;/b&gt;&lt;br&gt;&lt;br&gt;Deterministic fee tables — all brokers&lt;br&gt;Validator checks table accuracy&lt;br&gt;LLM used only for notes generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="40" y="300" width="480" height="122" as="geometry" />
+        <mxCell id="ep_cost" value="&lt;b&gt;Fee Comparison&lt;/b&gt;&lt;br&gt;&lt;br&gt;Compare costs across all Belgian brokers&lt;br&gt;Transparent fee tables · Accurate calculations&lt;br&gt;Detailed breakdown of all charges" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="380" width="540" height="130" as="geometry" />
         </mxCell>
 
-        <mxCell id="ep_refresh" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/refresh-and-analyze&lt;/b&gt;&lt;br&gt;&lt;br&gt;Scrapes broker PDFs → GPT-4o extracts&lt;br&gt;Claude Sonnet 4 structures fee rules&lt;br&gt;Updates fee_rules.json at runtime" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="560" y="300" width="480" height="122" as="geometry" />
+        <mxCell id="ep_refresh" value="&lt;b&gt;Data Refresh&lt;/b&gt;&lt;br&gt;&lt;br&gt;Automatically updates latest broker fees&lt;br&gt;Ensures data accuracy &amp; currency&lt;br&gt;Runs on schedule · Real-time extraction" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="610" y="380" width="540" height="130" as="geometry" />
         </mxCell>
 
-        <mxCell id="ep_chat" value="&lt;b&gt;POST  /chat&lt;/b&gt;&lt;br&gt;&lt;br&gt;Natural language Q&amp;A · Multi-turn&lt;br&gt;Regex: broker / instrument / EUR amount&lt;br&gt;Pre-computes deterministic fees for context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1080" y="300" width="480" height="122" as="geometry" />
+        <mxCell id="ep_chat" value="&lt;b&gt;Investor Chat&lt;/b&gt;&lt;br&gt;&lt;br&gt;Ask questions about brokers &amp; fees&lt;br&gt;Get personalized answers instantly&lt;br&gt;Natural language · Multi-turn conversation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="380" width="540" height="130" as="geometry" />
         </mxCell>
 
-        <mxCell id="ep_financial" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/financial-analysis&lt;/b&gt;&lt;br&gt;&lt;br&gt;Broker comparison narrative&lt;br&gt;Investor-specific recommendations&lt;br&gt;LLM: Claude Sonnet 4 · temp=0.0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1600" y="300" width="480" height="122" as="geometry" />
+        <mxCell id="ep_financial" value="&lt;b&gt;Analysis &amp; Recommendations&lt;/b&gt;&lt;br&gt;&lt;br&gt;Personalized broker recommendations&lt;br&gt;Based on investor profile &amp; goals&lt;br&gt;Narrative insights · Clear guidance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1750" y="380" width="630" height="130" as="geometry" />
         </mxCell>
 
         <!-- BUSINESS LOGIC -->
-        <mxCell id="fee_calc" value="&lt;b&gt;Fee Calculator&lt;/b&gt;&lt;br&gt;&lt;br&gt;validation/fee_calculator.py&lt;br&gt;Patterns: flat · tiered_flat · tiered_flat_then_slice&lt;br&gt;percentage_with_min · base_plus_slice&lt;br&gt;Reads fee_rules.json at runtime" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="40" y="460" width="655" height="118" as="geometry" />
+        <mxCell id="fee_calc" value="&lt;b&gt;Fee Calculation Engine&lt;/b&gt;&lt;br&gt;&lt;br&gt;Computes exact trading costs&lt;br&gt;Supports all fee structures&lt;br&gt;Accurate to the last cent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="590" width="730" height="120" as="geometry" />
         </mxCell>
 
-        <mxCell id="persona_calc" value="&lt;b&gt;Persona Calculator&lt;/b&gt;&lt;br&gt;&lt;br&gt;validation/persona_calculator.py&lt;br&gt;Computes Total Cost of Ownership (TCO)&lt;br&gt;3 profiles: passive · moderate · active_trader&lt;br&gt;Results cached 5 min in cache.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="735" y="460" width="655" height="118" as="geometry" />
+        <mxCell id="persona_calc" value="&lt;b&gt;Investor Profile Analyzer&lt;/b&gt;&lt;br&gt;&lt;br&gt;Evaluates trading activity level&lt;br&gt;3 profiles: Conservative · Moderate · Active&lt;br&gt;Tailors recommendations to each investor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="810" y="590" width="730" height="120" as="geometry" />
         </mxCell>
 
-        <mxCell id="validator" value="&lt;b&gt;Validator&lt;/b&gt;&lt;br&gt;&lt;br&gt;validation/validator.py&lt;br&gt;Validates LLM tables vs deterministic output&lt;br&gt;Zero-tolerance accuracy checks&lt;br&gt;Delegates explanations to _explain_fee()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1440" y="460" width="680" height="118" as="geometry" />
+        <mxCell id="validator" value="&lt;b&gt;Quality Verification System&lt;/b&gt;&lt;br&gt;&lt;br&gt;Validates all calculations&lt;br&gt;Ensures data accuracy &amp; reliability&lt;br&gt;Zero tolerance for errors" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6A1B9A;strokeColor=#4A148C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1580" y="590" width="800" height="120" as="geometry" />
         </mxCell>
 
         <!-- LLM SERVICES -->
-        <mxCell id="llm_gpt4o" value="&lt;b&gt;GPT-4o&lt;/b&gt;&lt;br&gt;&lt;br&gt;Role: PDF → Raw fee records&lt;br&gt;Module: llm_extract.py&lt;br&gt;temp=0.0  ·  Output: JSON mode&lt;br&gt;&lt;i&gt;Rec: migrate to claude-sonnet-4-6&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="40" y="620" width="470" height="130" as="geometry" />
+        <mxCell id="llm_gpt4o" value="&lt;b&gt;Document Analysis&lt;/b&gt;&lt;br&gt;&lt;br&gt;Extracts fee information from&lt;br&gt;broker documents automatically&lt;br&gt;Powered by AI · Accurate extraction" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="780" width="540" height="130" as="geometry" />
         </mxCell>
 
-        <mxCell id="llm_claude" value="&lt;b&gt;Claude Sonnet 4&lt;/b&gt;&lt;br&gt;&lt;br&gt;① Fee rules structuring&lt;br&gt;② Financial analysis narrative&lt;br&gt;③ Cost-comparison notes&lt;br&gt;temp=0.0  ·  JSON / text output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="560" y="620" width="470" height="130" as="geometry" />
+        <mxCell id="llm_claude" value="&lt;b&gt;Content Generation&lt;/b&gt;&lt;br&gt;&lt;br&gt;Creates comprehensive&lt;br&gt;analysis reports &amp; recommendations&lt;br&gt;Clear, investor-friendly language" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="610" y="780" width="540" height="130" as="geometry" />
         </mxCell>
 
-        <mxCell id="llm_groq" value="&lt;b&gt;Groq · Llama-3.3-70B Versatile&lt;/b&gt;&lt;br&gt;&lt;br&gt;Role: Chat primary LLM&lt;br&gt;Low-latency inference via Groq Cloud&lt;br&gt;temp=0.3  ·  Multi-turn conversation&lt;br&gt;Falls back to Gemini 2.0 Flash on error" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1080" y="620" width="470" height="130" as="geometry" />
+        <mxCell id="llm_groq" value="&lt;b&gt;Conversational AI&lt;/b&gt;&lt;br&gt;&lt;br&gt;Powers the investor chat feature&lt;br&gt;Fast, intelligent responses&lt;br&gt;Understands context &amp; nuance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="780" width="540" height="130" as="geometry" />
         </mxCell>
 
-        <mxCell id="llm_gemini_flash" value="&lt;b&gt;Gemini 2.0 Flash&lt;/b&gt;&lt;br&gt;&lt;br&gt;Role: Chat fallback model&lt;br&gt;Activated when Groq is unavailable&lt;br&gt;temp=0.3  ·  Text output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1600" y="620" width="470" height="130" as="geometry" />
+        <mxCell id="llm_gemini_flash" value="&lt;b&gt;Backup Intelligence&lt;/b&gt;&lt;br&gt;&lt;br&gt;Ensures continuous service&lt;br&gt;when primary system is busy&lt;br&gt;Seamless failover" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1750" y="780" width="630" height="130" as="geometry" />
         </mxCell>
 
         <!-- DATA LAYER -->
-        <mxCell id="pdf_files" value="&lt;b&gt;Broker PDF Documents&lt;/b&gt;&lt;br&gt;&lt;br&gt;6 Belgian brokers&lt;br&gt;Fee schedules &amp; tariff cards&lt;br&gt;Scraped via fetchers.py" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="42" y="800" width="306" height="88" as="geometry" />
+        <mxCell id="pdf_files" value="&lt;b&gt;Broker Information&lt;/b&gt;&lt;br&gt;&lt;br&gt;Latest fee schedules&lt;br&gt;from all Belgian brokers&lt;br&gt;Always up-to-date" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1000" width="280" height="100" as="geometry" />
         </mxCell>
 
-        <mxCell id="fee_rules_json" value="&lt;b&gt;fee_rules.json&lt;/b&gt;&lt;br&gt;&lt;br&gt;data/output/fee_rules.json&lt;br&gt;FeeRule + HiddenCosts per broker&lt;br&gt;No hardcoded fallback — runtime load" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="380" y="800" width="350" height="88" as="geometry" />
+        <mxCell id="fee_rules_json" value="&lt;b&gt;Structured Fee Database&lt;/b&gt;&lt;br&gt;&lt;br&gt;Organized broker fee structures&lt;br&gt;All charges &amp; conditions&lt;br&gt;Ready for calculation" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="350" y="1000" width="320" height="100" as="geometry" />
         </mxCell>
 
-        <mxCell id="cache_mem" value="&lt;b&gt;In-Memory Cache&lt;/b&gt;&lt;br&gt;&lt;br&gt;Persona TCO rankings&lt;br&gt;Context for /chat endpoint&lt;br&gt;TTL: 5 minutes  ·  cache.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="762" y="800" width="300" height="88" as="geometry" />
+        <mxCell id="cache_mem" value="&lt;b&gt;Performance Cache&lt;/b&gt;&lt;br&gt;&lt;br&gt;Pre-calculated broker rankings&lt;br&gt;for different investor types&lt;br&gt;Fast response times" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#455A64;strokeColor=#263238;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="710" y="1000" width="320" height="100" as="geometry" />
         </mxCell>
 
         <!-- OBSERVABILITY LAYER -->
-        <mxCell id="langfuse" value="&lt;b&gt;Langfuse&lt;/b&gt;&lt;br&gt;&lt;br&gt;LLM Observability Platform&lt;br&gt;Traces all 4 endpoints&lt;br&gt;Async background submission" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1122" y="800" width="310" height="88" as="geometry" />
+        <mxCell id="langfuse" value="&lt;b&gt;Performance Monitoring&lt;/b&gt;&lt;br&gt;&lt;br&gt;Tracks all activities&lt;br&gt;Monitors system health&lt;br&gt;Ensures reliability" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="1000" width="340" height="100" as="geometry" />
         </mxCell>
 
-        <mxCell id="llm_judge" value="&lt;b&gt;Gemini 2.5 Pro  (LLM-as-Judge)&lt;/b&gt;&lt;br&gt;&lt;br&gt;evaluation/llm_judge.py&lt;br&gt;Groundedness: 0 · 0.5 · 1&lt;br&gt;&lt;i&gt;Rec: migrate to Claude Opus 4&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1466" y="800" width="370" height="88" as="geometry" />
+        <mxCell id="llm_judge" value="&lt;b&gt;Quality Assessment&lt;/b&gt;&lt;br&gt;&lt;br&gt;AI-powered quality checking&lt;br&gt;Validates recommendations&lt;br&gt;Ensures accuracy &amp; relevance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1570" y="1000" width="360" height="100" as="geometry" />
         </mxCell>
 
-        <mxCell id="eval_results" value="&lt;b&gt;Langfuse Evaluations DB&lt;/b&gt;&lt;br&gt;&lt;br&gt;Auto scores per trace_id&lt;br&gt;0 = fail  ·  0.5 = partial  ·  1 = pass&lt;br&gt;create_langfuse_evaluation()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1868" y="800" width="296" height="88" as="geometry" />
+        <mxCell id="eval_results" value="&lt;b&gt;Quality Metrics&lt;/b&gt;&lt;br&gt;&lt;br&gt;Performance scores&lt;br&gt;Pass/fail assessments&lt;br&gt;Continuous improvement tracking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#00695C;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1970" y="1000" width="350" height="100" as="geometry" />
         </mxCell>
 
         <!-- ============================================================ -->
         <!-- LEGEND                                                        -->
         <!-- ============================================================ -->
         <mxCell id="legend_bg" value="" style="rounded=1;fillColor=#FAFAFA;strokeColor=#333333;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1130" y="628" width="400" height="112" as="geometry" />
+          <mxGeometry x="1100" y="1150" width="450" height="130" as="geometry" />
         </mxCell>
         <mxCell id="legend_hdr" value="&lt;b&gt;Legend&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=14;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="1130" y="630" width="400" height="24" as="geometry" />
+          <mxGeometry x="1100" y="1152" width="450" height="24" as="geometry" />
         </mxCell>
         <mxCell id="ls1" style="edgeStyle=none;html=1;strokeWidth=3;strokeColor=#333333;endArrow=block;endFill=1;" edge="1" parent="1">
           <mxGeometry relative="1" as="geometry">
-            <mxPoint x="1150" y="666" as="sourcePoint" />
-            <mxPoint x="1220" y="666" as="targetPoint" />
+            <mxPoint x="1120" y="1188" as="sourcePoint" />
+            <mxPoint x="1200" y="1188" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="ll1" value="Primary data / control flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="1228" y="657" width="290" height="18" as="geometry" />
+        <mxCell id="ll1" value="Primary capability / feature flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1208" y="1179" width="290" height="18" as="geometry" />
         </mxCell>
         <mxCell id="ls2" style="edgeStyle=none;html=1;strokeWidth=2;dashed=1;strokeColor=#333333;endArrow=block;endFill=1;" edge="1" parent="1">
           <mxGeometry relative="1" as="geometry">
-            <mxPoint x="1150" y="688" as="sourcePoint" />
-            <mxPoint x="1220" y="688" as="targetPoint" />
+            <mxPoint x="1120" y="1210" as="sourcePoint" />
+            <mxPoint x="1200" y="1210" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="ll2" value="Read / optional / fallback" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="1228" y="679" width="290" height="18" as="geometry" />
+        <mxCell id="ll2" value="Optional features or data references" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1208" y="1201" width="290" height="18" as="geometry" />
         </mxCell>
         <mxCell id="ls3" style="edgeStyle=none;html=1;strokeWidth=3;strokeColor=#004D40;endArrow=block;endFill=1;" edge="1" parent="1">
           <mxGeometry relative="1" as="geometry">
-            <mxPoint x="1150" y="710" as="sourcePoint" />
-            <mxPoint x="1220" y="710" as="targetPoint" />
+            <mxPoint x="1120" y="1232" as="sourcePoint" />
+            <mxPoint x="1200" y="1232" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="ll3" value="Observability / evaluation" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="1228" y="701" width="290" height="18" as="geometry" />
+        <mxCell id="ll3" value="System health, monitoring, and quality assurance" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1208" y="1223" width="290" height="18" as="geometry" />
         </mxCell>
 
         <!-- ============================================================ -->

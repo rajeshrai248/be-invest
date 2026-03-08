@@ -11,6 +11,10 @@ from .output_validator import (
     ValidationError,
     compute_cheapest_per_tier,
 )
+from .fee_extraction import (
+    build_extraction_prompt,
+    validate_and_fix_extraction,
+)
 
 __all__ = [
     "calculate_fee",
@@ -27,4 +31,6 @@ __all__ = [
     "ValidationResult",
     "ValidationError",
     "compute_cheapest_per_tier",
+    "build_extraction_prompt",
+    "validate_and_fix_extraction",
 ]
