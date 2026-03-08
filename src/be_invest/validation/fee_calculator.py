@@ -46,6 +46,7 @@ class FeeRule:
     handling_fee: float = 0.0
     min_fee: Optional[float] = None
     max_fee: Optional[float] = None
+    min_order: Optional[float] = None  # minimum order volume (not a fee); trade not valid below this
     exchange: str = "all"              # "all" | "euronext_brussels" | "nyse" | ...
     conditions: List[dict] = field(default_factory=list)
     notes: str = ""
@@ -80,8 +81,30 @@ _rules_loaded_from_json = False
 
 
 def _register(broker: str, instrument: str, rule: FeeRule) -> None:
-    """Register a fee rule in the global registry."""
-    FEE_RULES[(_normalize_broker(broker), _normalize_instrument(instrument), rule.exchange.lower())] = rule
+    """Register a fee rule in the global registry.
+
+    Priority: unconditional rules (no conditions) always win over conditional rules
+    for the same (broker, instrument, exchange) key.  A conditional rule will NOT
+    overwrite an already-registered unconditional rule, preventing LLM-extracted
+    special-case rules (phone orders, age tiers, paid plans) from silently replacing
+    the default pricing used in comparison tables.
+    """
+    key = (_normalize_broker(broker), _normalize_instrument(instrument), rule.exchange.lower())
+    existing = FEE_RULES.get(key)
+    if existing is not None:
+        if not existing.conditions and rule.conditions:
+            # Unconditional rule already registered — skip conditional rule
+            logger.debug(
+                f"Skipping conditional rule for {rule.broker} {rule.instrument} "
+                f"(exchange={rule.exchange}): unconditional rule already registered"
+            )
+            return
+        if not existing.conditions and not rule.conditions:
+            logger.warning(
+                f"Duplicate unconditional rules for {rule.broker} {rule.instrument} "
+                f"(exchange={rule.exchange}) — overwriting previous"
+            )
+    FEE_RULES[key] = rule
 
 
 def _compute_from_tiers(tiers: List[dict], amount: float, handling_fee: float = 0.0,
@@ -113,25 +136,49 @@ def _compute_from_tiers(tiers: List[dict], amount: float, handling_fee: float = 
         slices = math.ceil(remainder / tier["per_slice"])
         return tier["base_fee"] + (slices * tier["slice_fee"]) + handling_fee
 
-    # Tiered flat fees + optional per-slice tier at the end
-    # Separate flat tiers (with up_to) from slice tiers (with per_slice, no up_to)
+    # Tiered flat fees + optional tail tier (rate, per_slice, or base_plus_slice)
+    # Separate tier types:
+    #   flat        (has up_to)                               -- fixed fee for amounts ≤ threshold
+    #   base_slice  (has base_up_to)                         -- base fee + per-slice for remainder above base
+    #   slice       (has per_slice, no up_to, no base_up_to) -- pure slice (no base added)
+    #   rate        (has rate, no up_to, no per_slice)        -- percentage rate above all flat tiers
     flat_tiers = [t for t in tiers if "up_to" in t]
-    slice_tiers = [t for t in tiers if "per_slice" in t and "up_to" not in t]
+    base_slice_tiers = [t for t in tiers if "base_up_to" in t]
+    slice_tiers = [t for t in tiers if "per_slice" in t and "up_to" not in t and "base_up_to" not in t]
+    rate_tiers = [t for t in tiers if "rate" in t and "up_to" not in t and "per_slice" not in t]
 
     # Find the applicable flat tier
     for tier in flat_tiers:
         if amount <= tier["up_to"]:
             return tier["fee"] + handling_fee
 
-    # Amount exceeds all flat tiers -> use per_slice tier ONLY (no base)
+    # Amount exceeds all flat tiers.
+    # base_slice tier: base fee covers amounts up to base_up_to, then slices on remainder.
+    # This handles structures like Keytrade ETFs: €14.95 for first €10k, +€7.50 per additional €10k.
+    if base_slice_tiers:
+        tier = base_slice_tiers[0]
+        if amount <= tier["base_up_to"]:
+            return tier["base_fee"] + handling_fee
+        remainder = amount - tier["base_up_to"]
+        slices = math.ceil(remainder / tier["per_slice"])
+        return tier["base_fee"] + (slices * tier["slice_fee"]) + handling_fee
+
+    # Rate tiers represent the canonical broker pricing (e.g. 0.09% above €50K).
+    # Per-slice tiers are often LLM approximations of the real pricing.
+    if rate_tiers:
+        rate_tier = rate_tiers[0]
+        fee = amount * rate_tier["rate"]
+        fee = max(fee, rate_tier.get("min_fee", 0.0))
+        return fee + handling_fee
+
     if slice_tiers:
         slice_tier = slice_tiers[0]
         # Find the highest flat tier threshold to use as the base boundary
         highest_flat_threshold = max(t["up_to"] for t in flat_tiers) if flat_tiers else 0
 
-        # Compute slices for the remainder above the highest flat tier
+        # Compute slices for the remainder above the highest flat tier.
         # NOTE: We do NOT add the highest flat tier fee as a base.
-        # The slice tier is a separate pricing category.
+        # The slice tier is a separate pricing category (e.g. Bolero, Rebel).
         remainder = amount - highest_flat_threshold
         slices = math.ceil(remainder / slice_tier["per_slice"])
         fee = slices * slice_tier["fee"]
@@ -197,6 +244,8 @@ def calculate_fee(broker: str, instrument: str, amount: float, exchange: str = "
         rule = FEE_RULES.get((norm_broker, norm_instr, "all"))
     if rule is None:
         return None
+    if rule.min_order is not None and amount < rule.min_order:
+        return None  # order below minimum volume — not allowed
     fee = _compute_from_tiers(rule.tiers, amount, rule.handling_fee, rule.max_fee)
     return round(fee, 2)
 
@@ -236,6 +285,29 @@ def _ensure_rules_loaded() -> None:
             logger.warning(f"Failed to load fee_rules.json: {e}")
 
 
+def _sanitize_tiers(tiers: List[dict]) -> List[dict]:
+    """Clean LLM-extracted tier lists before they enter FEE_RULES.
+
+    Deduplicates per_slice tiers that share the same slice size — keeps the
+    first occurrence (which typically carries the max_fee cap).
+
+    Rate tiers alongside per_slice tiers are KEPT (not dropped) because they
+    may represent the correct high-bracket pricing (e.g. Keytrade stocks:
+    0.09% above €50K). The calculator gives rate tiers priority when both
+    per_slice and rate tiers are present.
+    """
+    cleaned: List[dict] = []
+    seen_slice_sizes: set = set()
+    for t in tiers:
+        if "per_slice" in t and "up_to" not in t:
+            key = t["per_slice"]
+            if key in seen_slice_sizes:
+                continue  # duplicate — skip
+            seen_slice_sizes.add(key)
+        cleaned.append(t)
+    return cleaned
+
+
 def load_fee_rules(path: Optional[Path] = None) -> Dict[tuple, FeeRule]:
     """Load fee rules from a JSON file into the global FEE_RULES registry.
 
@@ -250,14 +322,16 @@ def load_fee_rules(path: Optional[Path] = None) -> Dict[tuple, FeeRule]:
 
     rules_list = data.get("rules", [])
     for rule_dict in rules_list:
+        tiers = _sanitize_tiers(rule_dict.get("tiers", []))
         rule = FeeRule(
             broker=rule_dict["broker"],
             instrument=rule_dict["instrument"],
             pattern=rule_dict.get("pattern", "unknown"),
-            tiers=rule_dict.get("tiers", []),
+            tiers=tiers,
             handling_fee=rule_dict.get("handling_fee", 0.0),
             min_fee=rule_dict.get("min_fee"),
             max_fee=rule_dict.get("max_fee"),
+            min_order=rule_dict.get("min_order"),
             exchange=rule_dict.get("exchange", "all"),
             conditions=rule_dict.get("conditions", []),
             notes=rule_dict.get("notes", ""),
@@ -332,6 +406,8 @@ def save_fee_rules(rules: Optional[Dict[tuple, FeeRule]] = None, path: Optional[
             rule_dict["min_fee"] = rule.min_fee
         if rule.max_fee is not None:
             rule_dict["max_fee"] = rule.max_fee
+        if rule.min_order is not None:
+            rule_dict["min_order"] = rule.min_order
         if rule.conditions:
             rule_dict["conditions"] = rule.conditions
         if rule.notes:
@@ -434,16 +510,33 @@ def generate_explanation(broker: str, instrument: str, amount: float, exchange: 
         return (f"EUR{tier['base_fee']:.2f} base + {slices} x EUR{tier['slice_fee']:.2f} "
                 f"(EUR{remainder:.0f} remainder / EUR{tier['per_slice']:,} slices) = EUR{expected:.2f}")
 
-    # Tiered flat + optional slice
+    # Tiered flat + optional tail tier
     flat_tiers = [t for t in tiers if "up_to" in t]
-    slice_tiers = [t for t in tiers if "per_slice" in t and "up_to" not in t]
+    base_slice_tiers = [t for t in tiers if "base_up_to" in t]
+    slice_tiers = [t for t in tiers if "per_slice" in t and "up_to" not in t and "base_up_to" not in t]
+    rate_tiers = [t for t in tiers if "rate" in t and "up_to" not in t and "per_slice" not in t]
 
     # Check if amount falls in a flat tier
     for tier in flat_tiers:
         if amount <= tier["up_to"]:
             return f"Flat fee EUR{tier['fee']:.2f} (amount EUR{amount:.0f} <= EUR{tier['up_to']:,.0f})"
 
-    # Amount exceeds all flat tiers
+    # base_slice tail: base fee for first chunk, per-slice for remainder
+    if base_slice_tiers:
+        tier = base_slice_tiers[0]
+        if amount <= tier["base_up_to"]:
+            return f"Base fee EUR{tier['base_fee']:.2f} (amount EUR{amount:.0f} <= EUR{tier['base_up_to']:,.0f})"
+        remainder = amount - tier["base_up_to"]
+        slices = math.ceil(remainder / tier["per_slice"])
+        return (f"EUR{tier['base_fee']:.2f} base + {slices} x EUR{tier['slice_fee']:.2f} "
+                f"(EUR{remainder:.0f} / EUR{tier['per_slice']:,} slices) = EUR{expected:.2f}")
+
+    # Amount exceeds all flat tiers — rate (percentage) takes priority over per_slice
+    if rate_tiers:
+        rate_tier = rate_tiers[0]
+        rate_pct = rate_tier["rate"] * 100
+        return f"{rate_pct:.2f}% × EUR{amount:,.2f} = EUR{expected:.2f}"
+
     if slice_tiers:
         slice_tier = slice_tiers[0]
         highest_flat = max(flat_tiers, key=lambda t: t["up_to"]) if flat_tiers else None
@@ -506,15 +599,30 @@ def generate_methodology(broker: str, instrument: str, exchange: str = "all") ->
             f"then +\u20ac{tier['slice_fee']:.2f} per started \u20ac{tier['per_slice']:,} slice"
         )
 
-    # Tiered flat + optional slice
+    # Tiered flat + optional rate / slice / base_slice
     flat_tiers = sorted([t for t in tiers if "up_to" in t], key=lambda t: t["up_to"])
-    slice_tiers = [t for t in tiers if "per_slice" in t and "up_to" not in t]
+    base_slice_tiers = [t for t in tiers if "base_up_to" in t]
+    slice_tiers = [t for t in tiers if "per_slice" in t and "up_to" not in t and "base_up_to" not in t]
+    rate_tiers = [t for t in tiers if "rate" in t and "up_to" not in t and "per_slice" not in t]
 
     tier_parts = []
     for tier in flat_tiers:
         tier_parts.append(f"\u20ac{tier['fee']:.2f} (\u2264\u20ac{tier['up_to']:,.0f})")
 
-    if slice_tiers:
+    if base_slice_tiers:
+        bt = base_slice_tiers[0]
+        tier_parts.append(
+            f"\u20ac{bt['base_fee']:.2f} base (\u2264\u20ac{bt['base_up_to']:,.0f}), "
+            f"then +\u20ac{bt['slice_fee']:.2f} per started \u20ac{bt['per_slice']:,} slice"
+        )
+        return ", ".join(tier_parts) if tier_parts else "Custom fee structure"
+
+    # Rate tier takes priority over per_slice in methodology description
+    if rate_tiers:
+        rt = rate_tiers[0]
+        rate_pct = rt["rate"] * 100
+        tier_parts.append(f"then {rate_pct:.2f}% \u00d7 order amount")
+    elif slice_tiers:
         st = slice_tiers[0]
         slice_desc = f"then \u20ac{st['fee']:.2f} per started \u20ac{st['per_slice']:,} slice"
         effective_max = st.get("max_fee") or rule.max_fee
@@ -645,9 +753,9 @@ def _build_broker_notes() -> Dict[str, str]:
         "Bolero": "No custody fees for Belgian residents. Connectivity fee of EUR2.50/exchange/year.",
         "Keytrade Bank": "No account fees. Phone/international orders cost extra.",
         "Degiro Belgium": "EUR2 commission + EUR1 handling per trade. Connectivity fee EUR2.50/exchange/year.",
-        "ING Self Invest": "Web rate 0.35%. Minimum EUR1.00. Currency exchange margins apply.",
+        "ING Self Invest": "Web/app: 0.35% min EUR1 (Euronext Brussels/Amsterdam/Paris), 0.50% min EUR1 (other exchanges). Branch/phone: 1% min EUR40. Bonds: 0.50% min EUR50.",
         "Rebel": "No custody fees for Belgian stocks. Non-Belgian dividend collection fee. Part of Belfius.",
-        "Revolut": "Standard plan (free): 0.25% commission, EUR1 min, 1 free trade/month. FX fees above monthly limits.",
+        "Revolut": "Standard plan (free): 0.25% min EUR1 after 1 free trade/month. FX fee 1% above EUR1000/month. Plus EUR2.99+: 3 free trades, 0.5% FX. Premium EUR7.99+: 5 free trades, unlimited FX. No custody or connectivity fees.",
         "Trade Republic": "Flat EUR1 per trade for stocks, ETFs, bonds. Savings plans free. No custody or connectivity fees.",
     }
     for name, note in _STATIC_NOTES.items():

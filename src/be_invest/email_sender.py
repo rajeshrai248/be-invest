@@ -72,48 +72,119 @@ def _get_recipients() -> list[str]:
 
 _STYLES = """
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; color: #111827; margin: 0; padding: 24px 0; background: #f3f4f6; }
-    .wrapper { max-width: 700px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 16px rgba(0,0,0,0.06); }
-    .header { background: #FF6200; color: #fff; padding: 24px 40px; }
+    /* No box-shadow or border-radius — both silently fail in Outlook */
+    .wrapper { max-width: 700px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; }
+    .header { background: #FF6200; color: #fff; padding: 28px 40px 24px; }
     .header-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.85; margin: 0 0 6px; }
-    .header p { margin: 0; font-size: 13px; opacity: 0.85; }
+    .header-title { font-size: 22px; font-weight: 700; margin: 0 0 6px; line-height: 1.3; }
+    .header-date { margin: 0; font-size: 12px; opacity: 0.75; }
     .content { padding: 36px 40px; }
     p { word-wrap: break-word; overflow-wrap: break-word; max-width: 100%; margin: 0 0 16px; }
     em { word-wrap: break-word; overflow-wrap: break-word; }
-    .intro { font-size: 14px; color: #374151; line-height: 1.75; margin-bottom: 32px; padding-bottom: 28px; border-bottom: 1px solid #e5e7eb; }
+    .greeting { font-size: 16px; font-weight: 600; color: #111827; margin: 0 0 12px; }
+    .intro { font-size: 14px; color: #374151; line-height: 1.7; margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid #e5e7eb; }
+    /* TL;DR summary card */
+    .summary-card { background: #fff7ed; border: 1px solid #fed7aa; padding: 16px 20px; margin-bottom: 32px; }
+    .summary-card-title { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #ea580c; margin: 0 0 10px; }
+    .summary-item { display: inline-block; margin: 0 28px 6px 0; vertical-align: top; }
+    .summary-label { font-size: 11px; color: #6b7280; display: block; margin-bottom: 2px; }
+    .summary-value { font-size: 15px; font-weight: 700; color: #111827; }
     .section-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #FF6200; margin: 36px 0 4px; }
-    h2 { font-size: 20px; font-weight: 700; color: #111827; margin: 0 0 16px; }
-    h3 { color: #111827; font-size: 14px; font-weight: 700; margin: 0 0 12px; }
-    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 6px; }
+    h2 { font-size: 18px; font-weight: 700; color: #111827; margin: 0 0 16px; }
+    h3 { color: #111827; font-size: 14px; font-weight: 700; margin: 20px 0 10px; }
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 4px; }
+    .scroll-hint { font-size: 11px; color: #9ca3af; text-align: right; margin: 0 0 4px; display: none; }
     table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 13px; }
     th { background: #FF6200; color: #fff; padding: 11px 14px; text-align: right; font-weight: 600; font-size: 12px; }
     th:first-child { text-align: left; }
     td { padding: 10px 14px; border-bottom: 1px solid #f0f2f5; text-align: right; color: #374151; }
     td:first-child { text-align: left; font-weight: 600; color: #111827; }
-    tbody tr:nth-child(even) td { background: #f9fafb; }
-    tbody tr:hover td { background: #fff7ed !important; }
+    /* No :hover — ignored by all email clients; no nth-child striping — broken in Outlook */
+    /* bgcolor attributes on <tr> tags handle Outlook striping (see HTML) */
     .cheapest { background: #dcfce7 !important; color: #166534; font-weight: 700; }
-    .rank-1 td { background: #fff7ed !important; }
-    .rank-2 td { background: #f9fafb; }
-    .table-note { font-size: 12px; color: #6b7280; margin: 0 0 24px; line-height: 1.6; }
-    .footnotes { font-size: 11px; color: #6b7280; margin: 10px 0 28px; padding: 14px 16px; background: #f9fafb; border-left: 3px solid #FF6200; line-height: 1.9; border-radius: 0 4px 4px 0; }
+    /* rank-1: amber tint; rank-2: blue tint — clearly distinct from each other and plain rows */
+    .rank-1 td { background: #fef3c7 !important; }
+    .rank-2 td { background: #eff6ff !important; }
+    .table-note { font-size: 12px; color: #6b7280; margin: 0 0 16px; line-height: 1.6; }
+    .footnotes { font-size: 11px; color: #6b7280; margin: 10px 0 28px; padding: 14px 16px; background: #f9fafb; border-left: 3px solid #FF6200; line-height: 1.9; }
     .footnotes strong { color: #374151; }
     .divider { border: none; border-top: 1px solid #e5e7eb; margin: 36px 0; }
-    .footer { background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 24px 40px; font-size: 11px; color: #9ca3af; text-align: center; line-height: 1.9; }
+    /* CTA button */
+    .cta-wrap { text-align: center; padding: 32px 40px 8px; }
+    .cta-btn { display: inline-block; background: #FF6200; color: #ffffff !important; font-weight: 700; font-size: 14px; padding: 14px 36px; text-decoration: none; letter-spacing: 0.3px; }
+    .coverage-note { font-size: 13px; color: #6b7280; background: #f9fafb; border-left: 3px solid #d1d5db; padding: 10px 14px; margin: 0 0 24px; border-radius: 0 4px 4px 0; line-height: 1.6; }
+    .footer { background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 24px 40px; font-size: 12px; color: #9ca3af; text-align: center; line-height: 1.9; }
     .footer a { color: #FF6200; text-decoration: none; font-weight: 600; }
+    .footer-legal { font-size: 11px; color: #c0c4cc; margin-top: 8px; line-height: 1.7; }
     @media only screen and (max-width: 620px) {
-        .wrapper { border-radius: 0 !important; }
+        .wrapper { border: none !important; }
         .header { padding: 16px !important; }
+        .header-title { font-size: 18px !important; }
         .content { padding: 20px 16px !important; }
+        .cta-wrap { padding: 24px 16px 8px !important; }
         .footer { padding: 16px !important; }
         table { min-width: 0 !important; }
-        th { padding: 9px 8px !important; }
+        th { padding: 9px 8px !important; font-size: 11px !important; }
         td { padding: 8px 8px !important; }
         h2 { font-size: 16px !important; }
         h3 { font-size: 13px !important; }
         .section-eyebrow { margin-top: 24px !important; }
         .hide-mob { display: none !important; }
+        .scroll-hint { display: block !important; }
+        .summary-item { display: block !important; margin-bottom: 10px !important; }
     }
 """
+
+
+def _render_summary_card(all_stocks: dict, all_etfs: dict) -> str:
+    """Render a TL;DR highlights card showing cheapest brokers at a representative amount."""
+    preferred_amts = ["2500", "1000", "5000", "500", "250"]
+
+    def _cheapest_for(fee_data: dict) -> tuple[str, float, str] | None:
+        all_amts = {amt for fees in fee_data.values() for amt in fees}
+        target = next((a for a in preferred_amts if a in all_amts), None)
+        if not target:
+            target = max(all_amts, key=int) if all_amts else None
+        if not target:
+            return None
+        min_val: float | None = None
+        min_broker: str | None = None
+        for broker, fees in fee_data.items():
+            val = fees.get(target)
+            if val is not None and (min_val is None or val < min_val):
+                min_val = val
+                min_broker = broker
+        return (min_broker, min_val, target) if min_broker and min_val is not None else None
+
+    stocks_winner = _cheapest_for(all_stocks)
+    etfs_winner = _cheapest_for(all_etfs)
+    if not stocks_winner and not etfs_winner:
+        return ""
+
+    items = []
+    if stocks_winner:
+        broker, fee, amt = stocks_winner
+        items.append(
+            f'<span class="summary-item">'
+            f'<span class="summary-label">Cheapest stock trade at \u20ac{amt}</span>'
+            f'<span class="summary-value">{html.escape(broker)} \u2014 \u20ac{fee:.2f}</span>'
+            f'</span>'
+        )
+    if etfs_winner:
+        broker, fee, amt = etfs_winner
+        items.append(
+            f'<span class="summary-item">'
+            f'<span class="summary-label">Cheapest ETF trade at \u20ac{amt}</span>'
+            f'<span class="summary-value">{html.escape(broker)} \u2014 \u20ac{fee:.2f}</span>'
+            f'</span>'
+        )
+
+    return (
+        '<div class="summary-card">'
+        '<div class="summary-card-title">This week\'s highlights</div>'
+        + "".join(items)
+        + '</div>'
+    )
 
 
 def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None = None) -> str:
@@ -159,7 +230,7 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
     header = f"<tr><th>Broker</th>{header_cells}</tr>"
 
     rows = []
-    for broker, fees in sorted(fee_data.items()):
+    for row_idx, (broker, fees) in enumerate(sorted(fee_data.items())):
         broker_logic = (calc_logic or {}).get(broker, {})
         cells = []
         for amt in amount_cols:
@@ -173,14 +244,18 @@ def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None 
                 cells.append('<td class="hide-mob">—</td>' if mob else "<td>—</td>")
             elif val == min_per_col[amt]:
                 cls = "cheapest hide-mob" if mob else "cheapest"
-                cells.append(f'<td class="{cls}"{t}>€{val:.2f}</td>')
+                # ★ label makes "cheapest" legible without relying on color alone
+                cells.append(f'<td class="{cls}"{t}>\u20ac{val:.2f} \u2605</td>')
             else:
-                cells.append(f'<td class="hide-mob"{t}>€{val:.2f}</td>' if mob else f"<td{t}>€{val:.2f}</td>")
+                cells.append(f'<td class="hide-mob"{t}>\u20ac{val:.2f}</td>' if mob else f"<td{t}>\u20ac{val:.2f}</td>")
         logo = _broker_logo_img(broker)
-        rows.append(f"<tr><td>{logo}{broker}</td>{''.join(cells)}</tr>")
+        # bgcolor on <tr> is the Outlook-safe fallback for alternating row shading
+        row_bg = ' bgcolor="#f9fafb"' if row_idx % 2 == 1 else ""
+        rows.append(f"<tr{row_bg}><td>{logo}{broker}</td>{''.join(cells)}</tr>")
 
     return (
         f"<h3>{asset_label}</h3>"
+        f'<p class="scroll-hint">&#8592; scroll for more columns &#8594;</p>'
         f'<div class="table-wrap">'
         f"<table><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
         f"</div>"
@@ -390,12 +465,18 @@ def _render_persona_section(investor_personas: dict, persona_definitions: dict) 
                 + r.get("dividend_cost_annual", 0.0)
             )
             tco = r.get("total_annual_tco", 0.0)
-            row_class = f' class="rank-{rank}"' if rank in (1, 2) else ""
+            # bgcolor on <tr> is the Outlook-safe fallback; CSS class handles modern clients
+            if rank == 1:
+                row_attrs = ' class="rank-1" bgcolor="#fef3c7"'
+            elif rank == 2:
+                row_attrs = ' class="rank-2" bgcolor="#eff6ff"'
+            else:
+                row_attrs = ""
             rows.append(
-                f"<tr{row_class}>"
+                f"<tr{row_attrs}>"
                 f"<td>#{rank}</td><td>{_broker_logo_img(broker)}{broker}</td>"
-                f"<td>€{trading:.2f}</td><td>€{custody:.2f}</td>"
-                f"<td>€{other:.2f}</td><td><strong>€{tco:.2f}</strong></td>"
+                f"<td>\u20ac{trading:.2f}</td><td>\u20ac{custody:.2f}</td>"
+                f"<td>\u20ac{other:.2f}</td><td><strong>\u20ac{tco:.2f}</strong></td>"
                 "</tr>"
             )
 
@@ -444,32 +525,43 @@ def build_email_html(tables_data: dict) -> str:
 
     hidden_costs = tables_data.get("hidden_costs", {})
 
-    cheapest_badge = (
-        "<span style='background:#dcfce7;color:#166534;font-weight:700;"
-        "padding:2px 8px;border-radius:10px;font-size:11px;'>Green</span>"
-    )
+    summary_card = _render_summary_card(all_stocks, all_etfs)
+
     fee_section = (
+        '<p class="section-eyebrow">Fee Comparison</p>'
         '<h2>Transaction Fees by Investment Amount</h2>'
-        f'<p class="table-note">All amounts in EUR. Fees are deterministic and rule-based. '
-        f"{cheapest_badge} = cheapest broker for that amount. "
-        f'See <a href="#broker-notes" style="color:#FF6200;font-weight:600;">'
-        f'Broker Notes</a> below for additional fees, conditions, and promotions.</p>'
+        '<p class="table-note">All amounts in EUR. Computed from official tariff schedules. '
+        '\u2605 = cheapest broker for that column. '
+        'See <a href="#broker-notes" style="color:#FF6200;font-weight:600;">'
+        'Broker Notes</a> below for promotions and conditions.</p>'
         + _render_fee_table(
             "Stocks \u2014 Euronext Brussels, Amsterdam & Paris",
             all_stocks,
             stocks_logic,
         )
-        + _render_methodology_block(all_methodology, "stocks")
         + _render_fee_table(
             "ETFs \u2014 Euronext Brussels, Amsterdam & Paris",
             all_etfs,
             etfs_logic,
         )
-        + _render_methodology_block(all_methodology, "etfs")
         + _render_broker_notes(hidden_costs)
     )
 
-    html = f"""<!DOCTYPE html>
+    # Consolidated methodology appendix (moved out of per-table inline blocks)
+    methodology_appendix = ""
+    stocks_meth = _render_methodology_block(all_methodology, "stocks")
+    etfs_meth = _render_methodology_block(all_methodology, "etfs")
+    if stocks_meth or etfs_meth:
+        methodology_appendix = (
+            '<hr class="divider">'
+            '<p class="section-eyebrow">Appendix</p>'
+            '<h2>Fee Calculation Methodology</h2>'
+            '<p class="table-note">How each broker\'s fees are computed for the amounts shown above.</p>'
+            + (f'<h3>Stocks</h3>{stocks_meth}' if stocks_meth else "")
+            + (f'<h3>ETFs</h3>{etfs_meth}' if etfs_meth else "")
+        )
+
+    html_out = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -480,37 +572,45 @@ def build_email_html(tables_data: dict) -> str:
 <body>
 <div class="wrapper">
   <div class="header">
-    <p class="header-eyebrow">Broker Pricing Monitor · Belgium</p>
-    <p>{now_str}</p>
+    <p class="header-eyebrow">Broker Pricing Monitor &middot; Belgium</p>
+    <p class="header-title">Weekly Brokerage Fee Comparison</p>
+    <p class="header-date">{now_str}</p>
   </div>
   <div class="content">
+    <p class="greeting">Hello,</p>
     <p class="intro">
-      This weekly digest provides a structured, data-driven comparison of transaction fees
-      and total cost of ownership (TCO) across Belgian retail brokers. All figures are
-      computed deterministically from published tariff schedules, ensuring full
-      reproducibility and auditability for research purposes.<br><br>
-      Use this report to benchmark competitive fee positioning, detect pricing shifts
-      between brokers, and support your analysis of retail investment cost structures
-      in the Belgian brokerage market.
+      Here is this week&rsquo;s fee snapshot for Belgian retail brokers. All figures are
+      computed from published tariff schedules &mdash; no estimates, no guesswork.
     </p>
+    <p class="coverage-note">
+      We are continuously expanding our coverage to include additional platforms and
+      exchanges relevant to Belgian retail investors. Expect new brokers and trading
+      venues to appear in upcoming editions as our data sources grow.
+    </p>
+    {summary_card}
     {fee_section}
+    {methodology_appendix}
+  </div>
+  <div class="cta-wrap">
+    <a href="https://rajeshrai248.uk" class="cta-btn">View Live Dashboard &rarr;</a>
   </div>
   <div class="footer">
     Generated on {now_str}.<br>
-    Fees sourced from published tariff schedules as of the report date.<br><br>
-    Full comparisons, live data, and personalised cost analysis at
-    <a href="https://rajeshrai248.uk">rajeshrai248.uk</a><br>
-    <span style="font-size:10px;color:#c0c4cc;">
+    Fees sourced from published tariff schedules as of the report date.<br>
+    Full comparisons and personalised cost analysis at
+    <a href="https://rajeshrai248.uk">rajeshrai248.uk</a>
+    <div class="footer-legal">
       For informational purposes only. Not financial advice.<br>
-      Fee data is extracted and compiled by AI agents and may contain errors — always verify against official broker tariff schedules.<br>
+      Fee data is extracted and compiled by AI agents and may contain errors &mdash;
+      always verify against official broker tariff schedules.<br>
       &copy; {year} Rajesh Rai. All rights reserved.
-    </span>
+    </div>
   </div>
 </div>
 </body>
 </html>"""
 
-    return html
+    return html_out
 
 
 def send_email(subject: str, html_body: str, recipients: list[str]) -> None:
@@ -590,15 +690,14 @@ def build_and_send_report(recipients_override: list[str] | None = None) -> dict:
             "Set EMAIL_RECIPIENTS env var or pass recipients_override."
         )
 
-    # Collect broker names from loaded rules
+    # Always compute from FEE_RULES (loaded from fee_rules.json) — the same source
+    # of truth the /cost-comparison-tables endpoint uses. Reading from a cached JSON
+    # file risks serving stale values when fee rules change between file writes.
     broker_keys = list({rule.broker for rule in FEE_RULES.values()})
     if not broker_keys:
         raise ValueError("No fee rules loaded — cannot build comparison tables.")
-
     logger.info(f"Building comparison tables for {len(broker_keys)} brokers")
     tables = build_comparison_tables(broker_keys)
-
-    # Add hidden costs
     tables["hidden_costs"] = dict(HIDDEN_COSTS)
 
     html_body = build_email_html(tables)

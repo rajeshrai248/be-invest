@@ -13,6 +13,7 @@ import shutil
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from functools import wraps
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Callable
@@ -559,7 +560,8 @@ _last_news_scrape_at: Optional[datetime] = None
 _news_scrape_in_progress = False
 
 _EMAIL_SCHEDULER_ENABLED = os.environ.get("EMAIL_SCHEDULER_ENABLED", "true").lower() == "true"
-_EMAIL_SEND_HOUR_UTC = int(os.environ.get("EMAIL_SEND_HOUR_UTC", "9"))  # send at 09:00 UTC (≈ 10:00 CET) every Monday
+_EMAIL_SEND_HOUR_CET = int(os.environ.get("EMAIL_SEND_HOUR_CET", "9"))  # send at 09:00 CET/CEST (Brussels) every Monday
+_BRUSSELS_TZ = ZoneInfo("Europe/Brussels")
 _email_scheduler_timer: Optional[threading.Timer] = None
 _last_email_sent_at: Optional[datetime] = None
 _email_send_in_progress = False
@@ -658,15 +660,15 @@ def _run_scheduled_news_scrape() -> None:
 
 
 def _next_email_send_time() -> datetime:
-    """Return the next Monday at EMAIL_SEND_HOUR_UTC:00 UTC."""
-    now = datetime.now(timezone.utc)
+    """Return the next Monday at EMAIL_SEND_HOUR_CET:00 Europe/Brussels time."""
+    now = datetime.now(_BRUSSELS_TZ)
     # Monday = weekday 0; calculate days until the next Monday
     days_ahead = (0 - now.weekday()) % 7
-    if days_ahead == 0 and now.hour >= _EMAIL_SEND_HOUR_UTC:
+    if days_ahead == 0 and now.hour >= _EMAIL_SEND_HOUR_CET:
         # It's Monday but we've already passed the send time — schedule for next Monday
         days_ahead = 7
     next_monday = (now + timedelta(days=days_ahead)).replace(
-        hour=_EMAIL_SEND_HOUR_UTC, minute=0, second=0, microsecond=0
+        hour=_EMAIL_SEND_HOUR_CET, minute=0, second=0, microsecond=0
     )
     return next_monday
 
@@ -679,7 +681,7 @@ def _schedule_next_email() -> None:
     _email_scheduler_timer = threading.Timer(delay_secs, _run_scheduled_email_report)
     _email_scheduler_timer.daemon = True
     _email_scheduler_timer.start()
-    logger.info(f"⏰ Next email report scheduled for {next_run.strftime('%Y-%m-%d %H:%M UTC')}")
+    logger.info(f"⏰ Next email report scheduled for {next_run.strftime('%Y-%m-%d %H:%M %Z')}")
 
 
 def _run_scheduled_email_report() -> None:
@@ -1347,7 +1349,23 @@ def get_cost_comparison_tables(
     langfuse_context.score_current_trace(name="pricing_coverage", value=len(pricing_tiers_found) / 20)  # Assuming ~20 tiers is complete
     langfuse_context.score_current_trace(name="persona_calculation", value=1.0 if persona_success else 0.0)
 
-    # Save the JSON response to output directory
+    # Validate and auto-fix output before saving/caching/returning
+    try:
+        from ..validation import validate_and_fix
+        result, validation_result = validate_and_fix(result, "cost-comparison-tables")
+
+        if not validation_result.is_valid():
+            logger.warning(
+                f"⚠️ Validation found {len(validation_result.errors)} errors in cost-comparison-tables output"
+            )
+            # Add validation summary to response metadata
+            result["_validation"]["output_validation"] = validation_result.get_summary()
+        else:
+            logger.info(f"✅ Output validation passed: {validation_result.validated_fields} fields checked")
+    except Exception as e:
+        logger.error(f"❌ Output validation failed: {e}")
+
+    # Save the JSON response to output directory (post-validation so email reads correct values)
     output_dir = _default_output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "cost_comparison_tables.json"
@@ -1359,22 +1377,6 @@ def get_cost_comparison_tables(
     except Exception as save_error:
         logger.warning(f"Failed to save JSON response to file: {save_error}")
 
-    # Validate and auto-fix output before caching/returning
-    try:
-        from ..validation import validate_and_fix
-        result, validation_result = validate_and_fix(result, "cost-comparison-tables")
-        
-        if not validation_result.is_valid():
-            logger.warning(
-                f"⚠️ Validation found {len(validation_result.errors)} errors in cost-comparison-tables output"
-            )
-            # Add validation summary to response metadata
-            result["_validation"]["output_validation"] = validation_result.get_summary()
-        else:
-            logger.info(f"✅ Output validation passed: {validation_result.validated_fields} fields checked")
-    except Exception as e:
-        logger.error(f"❌ Output validation failed: {e}")
-    
     # Cache the result (language-agnostic - only calculations, not localized text)
     llm_cache.set(calc_cache_key, result)
     logger.info(f"Cached cost comparison calculations (calculations are language-agnostic)")
@@ -2045,6 +2047,19 @@ def _warm_comparison_table_cache(broker_names: list, model: str) -> None:
 
     calc_cache_key = FileCache.make_key("cost_comparison_calculations", model)
     llm_cache.set(calc_cache_key, result)
+
+    # Also persist to cost_comparison_tables.json so the email sender reads fresh values.
+    # Without this, /refresh-and-analyze updates the cache but the email reads a stale file.
+    output_dir = _default_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "cost_comparison_tables.json"
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+        logger.info(f"🔥 Saved warmed comparison tables to: {output_path}")
+    except Exception as save_error:
+        logger.warning(f"Failed to save warmed tables to file: {save_error}")
+
     logger.info(f"🔥 Comparison table cache warmed for {len(broker_names)} brokers (key={calc_cache_key[:16]}…)")
 
 
@@ -3274,7 +3289,7 @@ def _start_news_scrape_scheduler():
     if _EMAIL_SCHEDULER_ENABLED:
         logger.info(
             f"📧 Email report scheduler enabled — sends every Monday "
-            f"at {_EMAIL_SEND_HOUR_UTC:02d}:00 UTC"
+            f"at {_EMAIL_SEND_HOUR_CET:02d}:00 CET/CEST (Europe/Brussels)"
         )
         _schedule_next_email()
     else:
