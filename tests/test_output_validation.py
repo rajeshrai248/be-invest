@@ -190,6 +190,137 @@ def test_fee_calculation_consistency():
             print(f"  {broker} {instrument} €{amount}: No rule found")
 
 
+def test_fee_rules_3tuple_keys():
+    """Test that FEE_RULES uses 3-tuple keys (broker, instrument, exchange)."""
+    from be_invest.validation.fee_calculator import FEE_RULES, _ensure_rules_loaded
+    _ensure_rules_loaded()
+
+    if not FEE_RULES:
+        pytest.skip("No fee rules loaded — fee_rules.json may be missing")
+
+    for key in FEE_RULES:
+        assert len(key) == 3, f"FEE_RULES key should be 3-tuple, got {key}"
+        broker, instrument, exchange = key
+        assert isinstance(broker, str)
+        assert isinstance(instrument, str)
+        assert isinstance(exchange, str)
+        assert exchange, "exchange should not be empty"
+
+
+def test_exchange_fallback_logic():
+    """Test that calculate_fee falls back from specific exchange to 'all'."""
+    from be_invest.validation.fee_calculator import FEE_RULES, _ensure_rules_loaded
+    _ensure_rules_loaded()
+
+    if not FEE_RULES:
+        pytest.skip("No fee rules loaded — fee_rules.json may be missing")
+
+    # Pick a broker that has an "all" exchange rule
+    all_keys = [k for k in FEE_RULES if k[2] == "all"]
+    if not all_keys:
+        pytest.skip("No rules with exchange='all'")
+
+    broker, instrument, _ = all_keys[0]
+    rule = FEE_RULES[all_keys[0]]
+
+    # Exact match with "all"
+    fee_all = calculate_fee(rule.broker, instrument, 1000, "all")
+    assert fee_all is not None
+
+    # Fallback: non-existent exchange should fall back to "all"
+    fee_fallback = calculate_fee(rule.broker, instrument, 1000, "nonexistent_exchange")
+    assert fee_fallback is not None
+    assert fee_fallback == fee_all, "Fallback to 'all' should return same fee"
+
+
+def test_backward_compat_calculate_fee():
+    """Test that calculate_fee(broker, instrument, amount) still works without exchange."""
+    from be_invest.validation.fee_calculator import _ensure_rules_loaded
+    _ensure_rules_loaded()
+
+    # These are the same 3-arg calls that existed before the enrichment
+    fee = calculate_fee("Bolero", "stocks", 1000)
+    # Should not raise; may be None if fee_rules.json is missing
+    if fee is not None:
+        assert fee >= 0
+
+
+def test_fee_rule_new_fields():
+    """Test that FeeRule has exchange, conditions, notes, source fields with correct defaults."""
+    from be_invest.validation.fee_calculator import FeeRule
+
+    rule = FeeRule(broker="Test", instrument="stocks")
+    assert rule.exchange == "all"
+    assert rule.conditions == []
+    assert rule.notes == ""
+    assert rule.source == {}
+
+    rule_with_fields = FeeRule(
+        broker="Test",
+        instrument="stocks",
+        exchange="nyse",
+        conditions=[{"type": "age", "min_age": 18, "max_age": 24}],
+        notes="Youth discount",
+        source={"pdf": "test.pdf", "page": 1},
+    )
+    assert rule_with_fields.exchange == "nyse"
+    assert len(rule_with_fields.conditions) == 1
+    assert rule_with_fields.conditions[0]["type"] == "age"
+    assert rule_with_fields.notes == "Youth discount"
+    assert rule_with_fields.source["pdf"] == "test.pdf"
+
+
+def test_fee_rule_load_save_roundtrip():
+    """Test that new fields survive a save/load roundtrip."""
+    import tempfile
+    from be_invest.validation.fee_calculator import FeeRule, save_fee_rules, load_fee_rules, FEE_RULES
+
+    rule = FeeRule(
+        broker="TestBroker",
+        instrument="stocks",
+        pattern="flat",
+        tiers=[{"flat": 5.00}],
+        exchange="euronext_brussels",
+        conditions=[{"type": "plan", "plan_name": "Plus"}],
+        notes="Test note",
+        source={"pdf": "test.pdf"},
+    )
+    test_rules = {("testbroker", "stocks", "euronext_brussels"): rule}
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+        tmp_path = Path(f.name)
+
+    try:
+        save_fee_rules(test_rules, tmp_path, source="test")
+
+        # Read the JSON to verify fields are present
+        with open(tmp_path, "r") as f:
+            data = json.load(f)
+        saved_rule = data["rules"][0]
+        assert saved_rule["exchange"] == "euronext_brussels"
+        assert saved_rule["conditions"] == [{"type": "plan", "plan_name": "Plus"}]
+        assert saved_rule["notes"] == "Test note"
+        assert saved_rule["source"] == {"pdf": "test.pdf"}
+
+        # Clear and reload
+        old_rules = dict(FEE_RULES)
+        FEE_RULES.clear()
+        load_fee_rules(tmp_path)
+
+        loaded_key = ("testbroker", "stocks", "euronext_brussels")
+        assert loaded_key in FEE_RULES
+        loaded_rule = FEE_RULES[loaded_key]
+        assert loaded_rule.exchange == "euronext_brussels"
+        assert loaded_rule.conditions == [{"type": "plan", "plan_name": "Plus"}]
+        assert loaded_rule.notes == "Test note"
+        assert loaded_rule.source == {"pdf": "test.pdf"}
+    finally:
+        tmp_path.unlink(missing_ok=True)
+        # Restore original rules
+        FEE_RULES.clear()
+        FEE_RULES.update(old_rules)
+
+
 if __name__ == "__main__":
     # Run tests with pytest
     pytest.main([__file__, "-v", "-s"])

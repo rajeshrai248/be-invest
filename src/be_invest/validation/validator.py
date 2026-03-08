@@ -61,7 +61,7 @@ def _explain_fee(broker: str, instrument: str, amount: float, expected: float) -
     return generate_explanation(broker, instrument, amount)
 
 
-def validate_comparison_table(table_data: dict) -> ValidationResult:
+def validate_comparison_table(table_data: dict, exchange: str = "all") -> ValidationResult:
     """Validate an LLM-generated cost comparison table against deterministic fee calculations.
 
     Walks the response structure (euronext_brussels.stocks/etfs/bonds arrays)
@@ -69,6 +69,7 @@ def validate_comparison_table(table_data: dict) -> ValidationResult:
 
     Args:
         table_data: The parsed JSON response from the LLM.
+        exchange: Exchange to validate against (default "all").
 
     Returns:
         ValidationResult with is_valid=True if all checkable cells match.
@@ -110,7 +111,7 @@ def validate_comparison_table(table_data: dict) -> ValidationResult:
                     if size_str not in row:
                         continue
 
-                    expected = calculate_fee(broker, asset_type, float(size_str))
+                    expected = calculate_fee(broker, asset_type, float(size_str), exchange)
                     if expected is None:
                         # No rule for this broker/instrument combo -- skip
                         continue

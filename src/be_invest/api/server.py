@@ -13,6 +13,7 @@ import shutil
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from functools import wraps
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Callable
@@ -38,6 +39,11 @@ from ..validation.fee_calculator import (
     calculate_fee, generate_explanation, BROKER_ALIASES, _ensure_rules_loaded,
 )
 from ..validation.persona_calculator import build_persona_comparison
+from ..validation.fee_extraction import (
+    build_extraction_prompt,
+    parse_llm_extraction_response,
+    validate_and_fix_extraction,
+)
 
 # ========================================================================================
 # PYDANTIC MODELS
@@ -139,87 +145,215 @@ _PERSONA_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     },
 }
 
-# Static translation fragments for broker hidden cost notes
+# Static translation fragments for structured broker notes
 _NOTE_LABELS: Dict[str, Dict[str, str]] = {
     "en": {
-        "custody": "Custody",
-        "month": "month",
-        "min": "min",
-        "connectivity": "Connectivity",
-        "exchange_year": "exchange/year",
+        "custody": "Custody fee",
+        "connectivity": "Connectivity fee",
+        "fx": "FX fee",
         "subscription": "Subscription",
-        "fx": "FX",
-        "dividend_fee": "Dividend fee",
-        "no_hidden": "No significant hidden costs",
+        "handling": "Handling fee",
+        "dividend": "Dividend fee",
+        "transfer": "Transfer out",
+        "surcharge": "Surcharges",
+        "market_data": "Market data",
+        "promotion": "Promotions",
+        "other": "Other costs",
     },
     "fr-be": {
         "custody": "Frais de garde",
-        "month": "mois",
-        "min": "min",
-        "connectivity": "Connectivité",
-        "exchange_year": "bourse/an",
-        "subscription": "Abonnement",
+        "connectivity": "Frais de connectivité",
         "fx": "Frais de change",
-        "dividend_fee": "Frais de dividende",
-        "no_hidden": "Pas de frais cachés significatifs",
+        "subscription": "Abonnement",
+        "handling": "Frais de traitement",
+        "dividend": "Frais de dividende",
+        "transfer": "Transfert sortant",
+        "surcharge": "Surcharges",
+        "market_data": "Données de marché",
+        "promotion": "Promotions",
+        "other": "Autres frais",
     },
     "nl-be": {
         "custody": "Bewaarloon",
-        "month": "maand",
-        "min": "min",
-        "connectivity": "Connectiviteit",
-        "exchange_year": "beurs/jaar",
-        "subscription": "Abonnement",
+        "connectivity": "Connectiviteitskosten",
         "fx": "Wisselkoerskosten",
-        "dividend_fee": "Dividendkosten",
-        "no_hidden": "Geen significante verborgen kosten",
+        "subscription": "Abonnement",
+        "handling": "Verwerkingskosten",
+        "dividend": "Dividendkosten",
+        "transfer": "Uitgaande transfer",
+        "surcharge": "Toeslagen",
+        "market_data": "Marktgegevens",
+        "promotion": "Promoties",
+        "other": "Overige kosten",
     },
 }
 
+# Keyword-to-category mapping for parsing raw notes text
+_NOTE_CATEGORY_KEYWORDS: Dict[str, List[str]] = {
+    "custody": ["custody", "bewaarloon", "garde", "dormant"],
+    "connectivity": ["connectivity", "connectiviteit"],
+    "fx": ["fx", "currency", "exchange cost", "wissel", "conversion"],
+    "subscription": ["subscription", "plan", "abonnement"],
+    "handling": ["handling", "afwikkeling", "settlement"],
+    "dividend": ["dividend", "coupon"],
+    "transfer": ["transfer", "outgoing", "sortant"],
+    "surcharge": ["surcharge", "phone", "offline", "orderdesk"],
+    "market_data": ["real-time", "quotes", "market fee"],
+    "promotion": ["promotion", "youth", "discount", "saveback", "interest on cash", "free trade"],
+}
 
-def _build_localized_broker_notes(lang: str) -> Dict[str, str]:
-    """Build broker notes from structured hidden costs using localized labels.
+# Patterns that indicate advantage, warning, or info
+_ADVANTAGE_PATTERNS = ["free", "no custody", "no fee", "no connectivity", "no dividend", "eur 0", "kosteloos", "€0", "geen"]
+_WARNING_PATTERNS = ["not disclosed", "surcharge", "max ", "min eur", "dormant", "debit interest", "late submission"]
 
-    Uses static translation labels instead of LLM. Falls back to English for
-    unknown languages.
+
+def _classify_note_category(sentence: str) -> str:
+    """Classify a sentence into a note category using keyword matching."""
+    lower = sentence.lower()
+    for category, keywords in _NOTE_CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in lower:
+                return category
+    return "other"
+
+
+def _classify_highlight(sentence: str) -> str:
+    """Classify a sentence's highlight: advantage, warning, or info."""
+    lower = sentence.lower()
+    for pattern in _WARNING_PATTERNS:
+        if pattern in lower:
+            return "warning"
+    for pattern in _ADVANTAGE_PATTERNS:
+        if pattern in lower:
+            return "advantage"
+    return "info"
+
+
+def _parse_notes_text(raw_notes: str) -> List[Dict[str, str]]:
+    """Parse a raw notes string into structured note items.
+
+    Splits on numbered items (e.g. '1) ...') or sentence boundaries ('. '),
+    then classifies each into category + highlight.
     """
-    from ..validation.fee_calculator import HIDDEN_COSTS, _build_broker_notes
-    if not HIDDEN_COSTS:
-        return _build_broker_notes()
+    import re
+    # Split on numbered items like "1) " or "2. " first
+    parts = re.split(r'\d+\)\s+', raw_notes)
+    # If no numbered items found, split on ". " (sentence boundaries)
+    if len(parts) <= 1:
+        parts = [s.strip() for s in raw_notes.split(". ") if s.strip()]
+    else:
+        # First element is empty string before "1)", filter it out
+        parts = [s.strip().rstrip(".") for s in parts if s.strip()]
 
-    labels = _NOTE_LABELS.get(lang, _NOTE_LABELS["en"])
-    notes = {}
+    items: List[Dict[str, str]] = []
+    seen_categories: set = set()
+    for part in parts:
+        if not part or len(part) < 5:
+            continue
+        category = _classify_note_category(part)
+        highlight = _classify_highlight(part)
+        # Clean up trailing period
+        description = part.rstrip(".")
+        items.append({
+            "category": category,
+            "label": _NOTE_LABELS["en"][category],
+            "description": description,
+            "highlight": highlight,
+        })
+        seen_categories.add(category)
+    return items
+
+
+def _build_structured_broker_notes() -> Dict[str, List[Dict[str, str]]]:
+    """Build structured broker notes from HiddenCosts data.
+
+    Returns a dict mapping broker display name to a list of structured note
+    items, each with category, label, description, and highlight.
+    """
+    from ..validation.fee_calculator import HIDDEN_COSTS
+
+    notes: Dict[str, List[Dict[str, str]]] = {}
 
     for broker_name, costs in HIDDEN_COSTS.items():
-        # If there's a raw notes string and lang is English, use it directly
-        if lang == "en" and costs.notes:
-            notes[broker_name] = costs.notes
-            continue
+        items: List[Dict[str, str]] = []
 
-        parts = []
-        if costs.custody_fee_monthly_pct > 0:
-            parts.append(f"{labels['custody']}: {costs.custody_fee_monthly_pct}%/{labels['month']} ({labels['min']} EUR{costs.custody_fee_monthly_min:.2f}/{labels['month']})")
-        if costs.connectivity_fee_per_exchange_year > 0:
-            parts.append(f"{labels['connectivity']}: EUR{costs.connectivity_fee_per_exchange_year:.2f}/{labels['exchange_year']}")
+        # 1. Build items from numeric HiddenCosts fields
+        if costs.custody_fee_monthly_pct == 0 and costs.custody_fee_monthly_min == 0:
+            items.append({"category": "custody", "label": "Custody fee", "description": "Free", "highlight": "advantage"})
+        elif costs.custody_fee_monthly_pct > 0:
+            desc = f"{costs.custody_fee_monthly_pct}%/month"
+            if costs.custody_fee_monthly_min > 0:
+                desc += f" (min EUR{costs.custody_fee_monthly_min:.2f}/month)"
+            items.append({"category": "custody", "label": "Custody fee", "description": desc, "highlight": "info"})
+
+        if costs.connectivity_fee_per_exchange_year == 0:
+            items.append({"category": "connectivity", "label": "Connectivity fee", "description": "Free", "highlight": "advantage"})
+        else:
+            desc = f"EUR{costs.connectivity_fee_per_exchange_year:.2f}/exchange/year"
+            if costs.connectivity_fee_max_pct_account > 0:
+                desc += f" (max {costs.connectivity_fee_max_pct_account}% of account)"
+            items.append({"category": "connectivity", "label": "Connectivity fee", "description": desc, "highlight": "info"})
+
         if costs.subscription_fee_monthly > 0:
-            parts.append(f"{labels['subscription']}: EUR{costs.subscription_fee_monthly:.2f}/{labels['month']}")
-        if costs.fx_fee_pct > 0:
-            parts.append(f"{labels['fx']}: {costs.fx_fee_pct}%")
-        if costs.dividend_fee_pct > 0:
-            parts.append(f"{labels['dividend_fee']}: {costs.dividend_fee_pct}%")
-        if not parts:
-            parts.append(labels["no_hidden"])
+            desc = f"EUR{costs.subscription_fee_monthly:.2f}/month"
+            if costs.subscription_plan_name:
+                desc = f"{costs.subscription_plan_name}: {desc}"
+            items.append({"category": "subscription", "label": "Subscription", "description": desc, "highlight": "info"})
 
-        notes[broker_name] = ". ".join(parts) + "."
+        if costs.fx_fee_pct == 0:
+            # Check if notes mention FX is "not disclosed" rather than truly free
+            notes_lower = costs.notes.lower() if costs.notes else ""
+            if "not disclosed" in notes_lower and ("fx" in notes_lower or "conversion" in notes_lower or "exchange" in notes_lower):
+                items.append({"category": "fx", "label": "FX fee", "description": "Not disclosed", "highlight": "warning"})
+            else:
+                items.append({"category": "fx", "label": "FX fee", "description": "Free", "highlight": "advantage"})
+        elif costs.fx_fee_pct > 0:
+            items.append({"category": "fx", "label": "FX fee", "description": f"{costs.fx_fee_pct}%", "highlight": "info"})
 
-    # Fallback statics for brokers with no hidden cost data
-    from ..validation.fee_calculator import _build_broker_notes as _build_en_notes
-    en_notes = _build_en_notes()
-    for name, note in en_notes.items():
-        if name not in notes:
-            notes[name] = note
+        if costs.handling_fee_per_trade > 0:
+            items.append({"category": "handling", "label": "Handling fee", "description": f"EUR{costs.handling_fee_per_trade:.2f}/trade", "highlight": "info"})
+
+        if costs.dividend_fee_pct == 0:
+            items.append({"category": "dividend", "label": "Dividend fee", "description": "Free", "highlight": "advantage"})
+        elif costs.dividend_fee_pct > 0:
+            desc = f"{costs.dividend_fee_pct}%"
+            if costs.dividend_fee_min > 0 or costs.dividend_fee_max > 0:
+                min_part = f"min EUR{costs.dividend_fee_min:.2f}" if costs.dividend_fee_min > 0 else ""
+                max_part = f"max EUR{costs.dividend_fee_max:.2f}" if costs.dividend_fee_max > 0 else ""
+                bounds = ", ".join(filter(None, [min_part, max_part]))
+                desc += f" ({bounds})"
+            items.append({"category": "dividend", "label": "Dividend fee", "description": desc, "highlight": "info"})
+
+        # 2. Parse raw notes string for additional items not captured above
+        if costs.notes:
+            numeric_categories = {item["category"] for item in items}
+            parsed = _parse_notes_text(costs.notes)
+            for parsed_item in parsed:
+                # Skip items whose category is already covered by numeric fields
+                if parsed_item["category"] in numeric_categories:
+                    continue
+                items.append(parsed_item)
+
+        notes[broker_name] = items
 
     return notes
+
+
+def _localize_structured_notes(
+    notes: Dict[str, List[Dict[str, str]]], lang: str
+) -> Dict[str, List[Dict[str, str]]]:
+    """Translate labels in structured notes to the target language."""
+    if lang == "en":
+        return notes
+    labels = _NOTE_LABELS.get(lang, _NOTE_LABELS["en"])
+    import copy
+    localized = copy.deepcopy(notes)
+    for broker_items in localized.values():
+        for item in broker_items:
+            cat = item.get("category", "other")
+            if cat in labels:
+                item["label"] = labels[cat]
+    return localized
 
 
 # ========================================================================================
@@ -431,7 +565,8 @@ _last_news_scrape_at: Optional[datetime] = None
 _news_scrape_in_progress = False
 
 _EMAIL_SCHEDULER_ENABLED = os.environ.get("EMAIL_SCHEDULER_ENABLED", "true").lower() == "true"
-_EMAIL_SEND_HOUR_UTC = int(os.environ.get("EMAIL_SEND_HOUR_UTC", "9"))  # send at 09:00 UTC (≈ 10:00 CET) every Monday
+_EMAIL_SEND_HOUR_CET = int(os.environ.get("EMAIL_SEND_HOUR_CET", "9"))  # send at 09:00 CET/CEST (Brussels) every Monday
+_BRUSSELS_TZ = ZoneInfo("Europe/Brussels")
 _email_scheduler_timer: Optional[threading.Timer] = None
 _last_email_sent_at: Optional[datetime] = None
 _email_send_in_progress = False
@@ -530,15 +665,15 @@ def _run_scheduled_news_scrape() -> None:
 
 
 def _next_email_send_time() -> datetime:
-    """Return the next Monday at EMAIL_SEND_HOUR_UTC:00 UTC."""
-    now = datetime.now(timezone.utc)
+    """Return the next Monday at EMAIL_SEND_HOUR_CET:00 Europe/Brussels time."""
+    now = datetime.now(_BRUSSELS_TZ)
     # Monday = weekday 0; calculate days until the next Monday
     days_ahead = (0 - now.weekday()) % 7
-    if days_ahead == 0 and now.hour >= _EMAIL_SEND_HOUR_UTC:
+    if days_ahead == 0 and now.hour >= _EMAIL_SEND_HOUR_CET:
         # It's Monday but we've already passed the send time — schedule for next Monday
         days_ahead = 7
     next_monday = (now + timedelta(days=days_ahead)).replace(
-        hour=_EMAIL_SEND_HOUR_UTC, minute=0, second=0, microsecond=0
+        hour=_EMAIL_SEND_HOUR_CET, minute=0, second=0, microsecond=0
     )
     return next_monday
 
@@ -551,7 +686,7 @@ def _schedule_next_email() -> None:
     _email_scheduler_timer = threading.Timer(delay_secs, _run_scheduled_email_report)
     _email_scheduler_timer.daemon = True
     _email_scheduler_timer.start()
-    logger.info(f"⏰ Next email report scheduled for {next_run.strftime('%Y-%m-%d %H:%M UTC')}")
+    logger.info(f"⏰ Next email report scheduled for {next_run.strftime('%Y-%m-%d %H:%M %Z')}")
 
 
 def _run_scheduled_email_report() -> None:
@@ -1127,9 +1262,10 @@ def get_cost_comparison_tables(
     # Build fee tables deterministically (no LLM needed)
     result = build_comparison_tables(broker_names)
 
-    # Generate notes with localized labels (no LLM needed)
-    hidden_cost_notes = _build_localized_broker_notes(lang)
-    notes = {_get_display_name(name): hidden_cost_notes.get(_get_display_name(name), "") for name in broker_names}
+    # Generate structured notes with localized labels (no LLM needed)
+    structured_notes = _build_structured_broker_notes()
+    notes = {_get_display_name(name): structured_notes.get(_get_display_name(name), []) for name in broker_names}
+    notes = _localize_structured_notes(notes, lang)
     result["euronext_brussels"]["notes"] = notes
 
     # Add investor persona comparison
@@ -1218,7 +1354,23 @@ def get_cost_comparison_tables(
     langfuse_context.score_current_trace(name="pricing_coverage", value=len(pricing_tiers_found) / 20)  # Assuming ~20 tiers is complete
     langfuse_context.score_current_trace(name="persona_calculation", value=1.0 if persona_success else 0.0)
 
-    # Save the JSON response to output directory
+    # Validate and auto-fix output before saving/caching/returning
+    try:
+        from ..validation import validate_and_fix
+        result, validation_result = validate_and_fix(result, "cost-comparison-tables")
+
+        if not validation_result.is_valid():
+            logger.warning(
+                f"⚠️ Validation found {len(validation_result.errors)} errors in cost-comparison-tables output"
+            )
+            # Add validation summary to response metadata
+            result["_validation"]["output_validation"] = validation_result.get_summary()
+        else:
+            logger.info(f"✅ Output validation passed: {validation_result.validated_fields} fields checked")
+    except Exception as e:
+        logger.error(f"❌ Output validation failed: {e}")
+
+    # Save the JSON response to output directory (post-validation so email reads correct values)
     output_dir = _default_output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "cost_comparison_tables.json"
@@ -1230,22 +1382,6 @@ def get_cost_comparison_tables(
     except Exception as save_error:
         logger.warning(f"Failed to save JSON response to file: {save_error}")
 
-    # Validate and auto-fix output before caching/returning
-    try:
-        from ..validation import validate_and_fix
-        result, validation_result = validate_and_fix(result, "cost-comparison-tables")
-        
-        if not validation_result.is_valid():
-            logger.warning(
-                f"⚠️ Validation found {len(validation_result.errors)} errors in cost-comparison-tables output"
-            )
-            # Add validation summary to response metadata
-            result["_validation"]["output_validation"] = validation_result.get_summary()
-        else:
-            logger.info(f"✅ Output validation passed: {validation_result.validated_fields} fields checked")
-    except Exception as e:
-        logger.error(f"❌ Output validation failed: {e}")
-    
     # Cache the result (language-agnostic - only calculations, not localized text)
     llm_cache.set(calc_cache_key, result)
     logger.info(f"Cached cost comparison calculations (calculations are language-agnostic)")
@@ -1351,13 +1487,11 @@ def _localize_cost_comparison_response(result: Dict[str, Any], lang: str) -> Dic
     if lang == "en":
         return localized
     
-    # Translate broker notes (hidden costs)
+    # Translate broker notes (structured array format)
     if "notes" in localized.get("euronext_brussels", {}):
-        notes = localized["euronext_brussels"]["notes"]
-        for broker_name in notes.keys():
-            # Rebuild notes from BROKER_NOTES static dictionary (which may have translations)
-            # For now, keep EN notes - full translation would require static/LLM translation layer
-            pass
+        localized["euronext_brussels"]["notes"] = _localize_structured_notes(
+            localized["euronext_brussels"]["notes"], lang
+        )
     
     # Translate calculation_logic explanations
     if "calculation_logic" in localized.get("euronext_brussels", {}):
@@ -1907,8 +2041,8 @@ def _warm_comparison_table_cache(broker_names: list, model: str) -> None:
     """
     result = build_comparison_tables(broker_names)
 
-    hidden_cost_notes = _build_localized_broker_notes("en")
-    notes = {_get_display_name(n): hidden_cost_notes.get(_get_display_name(n), "") for n in broker_names}
+    structured_notes = _build_structured_broker_notes()
+    notes = {_get_display_name(n): structured_notes.get(_get_display_name(n), []) for n in broker_names}
     result["euronext_brussels"]["notes"] = notes
 
     try:
@@ -1918,6 +2052,19 @@ def _warm_comparison_table_cache(broker_names: list, model: str) -> None:
 
     calc_cache_key = FileCache.make_key("cost_comparison_calculations", model)
     llm_cache.set(calc_cache_key, result)
+
+    # Also persist to cost_comparison_tables.json so the email sender reads fresh values.
+    # Without this, /refresh-and-analyze updates the cache but the email reads a stale file.
+    output_dir = _default_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "cost_comparison_tables.json"
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+        logger.info(f"🔥 Saved warmed comparison tables to: {output_path}")
+    except Exception as save_error:
+        logger.warning(f"Failed to save warmed tables to file: {save_error}")
+
     logger.info(f"🔥 Comparison table cache warmed for {len(broker_names)} brokers (key={calc_cache_key[:16]}…)")
 
 
@@ -2174,6 +2321,13 @@ Return ONLY a valid JSON object with structured fee data.
         old_rules = dict(FEE_RULES)
         new_rules = _extract_fee_rules_from_cost_data(all_analyses, model)
         if new_rules:
+            # Validate and auto-correct LLM extraction errors against golden reference
+            new_rules, fix_count, validation_warnings = validate_and_fix_extraction(new_rules, HIDDEN_COSTS)
+            for w in validation_warnings:
+                logger.warning(f"Extraction validation: {w}")
+            if fix_count > 0:
+                logger.warning(f"Applied {fix_count} auto-corrections to LLM-extracted rules")
+
             fee_rules_diff = get_rules_diff(old_rules, new_rules)
             if fee_rules_diff:
                 logger.info(f"Fee rules changed: {fee_rules_diff}")
@@ -2246,141 +2400,24 @@ def _extract_fee_rules_from_cost_data(cost_data: Dict[str, Any], model: str) -> 
 
         logger.info(f"Extracting fee rules for {broker_name}...")
 
-        user_prompt = f"""Extract ALL fee rules and hidden costs for {broker_name} on Euronext Brussels.
-
-Extract:
-1. TRADING RULES: The exact fee structure with pattern type and all tier thresholds
-2. HIDDEN COSTS: Custody fees, connectivity fees, FX fees, dividend fees, subscription fees
-
-Input data for {broker_name}:
-{json.dumps(broker_data, indent=2)}
-
-Return a JSON object with EXACTLY this structure:
-
-{{
-  "rules": [
-    {{
-      "broker": "{broker_name}",
-      "instrument": "stocks",
-      "pattern": "pattern_type",
-      "tiers": [...],
-      "handling_fee": 0.0
-    }}
-  ],
-  "hidden_costs": {{
-    "{broker_name}": {{
-      "custody_fee_monthly_pct": 0.0,
-      "custody_fee_monthly_min": 0.0,
-      "connectivity_fee_per_exchange_year": 0.0,
-      "connectivity_fee_max_pct_account": 0.0,
-      "subscription_fee_monthly": 0.0,
-      "subscription_plan_name": "",
-      "fx_fee_pct": 0.0,
-      "handling_fee_per_trade": 0.0,
-      "dividend_fee_pct": 0.0,
-      "dividend_fee_min": 0.0,
-      "dividend_fee_max": 0.0,
-      "notes": "Brief description of hidden costs"
-    }}
-  }}
-}}
-
-PATTERN TYPES (use exactly these strings):
-- "flat": Simple flat fee for all amounts (e.g., Degiro EUR2 + EUR1 handling)
-- "tiered_flat": Multiple flat fee tiers by amount (only up_to tiers, no slice)
-- "tiered_flat_then_slice": Flat tiers for small amounts, per-slice for larger amounts (Bolero, Keytrade, Rebel)
-- "percentage_with_min": Percentage rate with minimum fee (ING, Revolut)
-- "base_plus_slice": Single base fee threshold + per-slice for remainder
-
-TIER TYPES:
-- {{"flat": 2.00}} - simple flat fee
-- {{"up_to": 2500, "fee": 7.50}} - flat fee for amounts up to threshold
-- {{"per_slice": 10000, "fee": 15.00}} - per-started-slice (no up_to means it applies after all flat tiers)
-- {{"per_slice": 10000, "fee": 15.00, "max_fee": 50.00}} - per-slice with fee cap
-- {{"rate": 0.0035, "min_fee": 1.00}} - percentage rate with minimum
-
-CRITICAL — TWO DIFFERENT NUMERIC CONVENTIONS ARE USED IN THE SAME JSON:
-
-1. TIER "rate" fields (inside the "tiers" array) use DECIMAL FRACTIONS:
-   The calculator does: fee = amount * rate — so rate must be a decimal fraction.
-   - rate: 0.0035 means 0.35% commission
-   - rate: 0.0025 means 0.25% commission
-   - rate: 0.005  means 0.50% commission
-   - WRONG: rate=0.35 for a 0.35% fee. RIGHT: rate=0.0035 for a 0.35% fee.
-   - WRONG: rate=0.25 for a 0.25% fee. RIGHT: rate=0.0025 for a 0.25% fee.
-
-2. "_pct" fields in "hidden_costs" use PERCENTAGE NOTATION (NOT decimal fractions):
-   - fx_fee_pct: 0.25 means 0.25%, NOT 25%. A value of 1.0 means 1%. A value of 1.40 means 1.40%.
-   - custody_fee_monthly_pct: 0.0242 means 0.0242% per month. A value of 2.0 means 2% per month.
-   - dividend_fee_pct: 2.42 means 2.42%. A value of 2.0 means 2%. Do NOT write 0.02 to mean 2%.
-   - connectivity_fee_max_pct_account follows the same rule.
-   - WRONG: dividend_fee_pct=0.02 for a 2% fee. RIGHT: dividend_fee_pct=2.0 for a 2% fee.
-   - WRONG: fx_fee_pct=0.0025 for a 0.25% fee. RIGHT: fx_fee_pct=0.25 for a 0.25% fee.
-
-IMPORTANT:
-- Extract ALL tiers from the data. Many brokers have 4-5 tiers, not just 2.
-- Include "max_fee" on the per_slice tier if the broker caps total commission.
-- Include rules for stocks, etfs, AND bonds where the data is available.
-- Use exact broker name: {broker_name}
-- Extract the STANDARD fee schedule, not promotional or conditional rates.
-  For example, Degiro has a "Core Selection" of ETFs with zero commission, but
-  the standard ETF fee on Euronext Brussels is EUR2 + EUR1 handling (same as stocks).
-  Always use the standard/default rate that applies to ALL instruments of that type.
-- A rule where ALL fees are EUR 0.00 is almost certainly wrong. If fees appear
-  to be zero, double-check whether a separate handling fee or commission applies.
-- For brokers with SUBSCRIPTION-BASED pricing (e.g., monthly plans that include a number
-  of free trades): set subscription_fee_monthly to the lowest PAID tier price (not the
-  free/basic plan), and set subscription_plan_name to the name of that entry-level paid plan
-  (e.g. "Plus", "Premium", "Pro"). Document ALL subscription tiers and what they include
-  (free trades, FX limits, etc.) in the notes field.
-  Example: subscription_fee_monthly=2.99, subscription_plan_name="Plus".
-"""
+        user_prompt = build_extraction_prompt(broker_name, broker_data)
 
         try:
             response_text = _call_llm(model, system_prompt, user_prompt, response_format="json")
-            data = json.loads(response_text)
-            rules_list = data.get("rules", [])
+            parsed_rules, parsed_hidden = parse_llm_extraction_response(response_text)
 
             broker_rule_count = 0
-            for rule_dict in rules_list:
-                broker = rule_dict.get("broker", "")
-                instrument = rule_dict.get("instrument", "")
-                if not broker or not instrument:
-                    continue
-                rule = FeeRule(
-                    broker=broker,
-                    instrument=instrument,
-                    pattern=rule_dict.get("pattern", "unknown"),
-                    tiers=rule_dict.get("tiers", []),
-                    handling_fee=rule_dict.get("handling_fee", 0.0),
-                    min_fee=rule_dict.get("min_fee"),
-                    max_fee=rule_dict.get("max_fee"),
-                )
-                all_rules[(broker.lower(), instrument.lower())] = rule
+            for rule in parsed_rules:
+                all_rules[(rule.broker.lower(), rule.instrument.lower(), rule.exchange.lower())] = rule
                 broker_rule_count += 1
 
             # Load hidden costs for this broker
-            hidden_costs_data = data.get("hidden_costs", {})
-            for hc_name, costs_dict in hidden_costs_data.items():
-                if isinstance(costs_dict, dict):
-                    HIDDEN_COSTS[hc_name] = HiddenCosts(
-                        custody_fee_monthly_pct=costs_dict.get("custody_fee_monthly_pct", 0.0),
-                        custody_fee_monthly_min=costs_dict.get("custody_fee_monthly_min", 0.0),
-                        connectivity_fee_per_exchange_year=costs_dict.get("connectivity_fee_per_exchange_year", 0.0),
-                        connectivity_fee_max_pct_account=costs_dict.get("connectivity_fee_max_pct_account", 0.0),
-                        subscription_fee_monthly=costs_dict.get("subscription_fee_monthly", 0.0),
-                        subscription_plan_name=costs_dict.get("subscription_plan_name", ""),
-                        fx_fee_pct=costs_dict.get("fx_fee_pct", 0.0),
-                        handling_fee_per_trade=costs_dict.get("handling_fee_per_trade", 0.0),
-                        dividend_fee_pct=costs_dict.get("dividend_fee_pct", 0.0),
-                        dividend_fee_min=costs_dict.get("dividend_fee_min", 0.0),
-                        dividend_fee_max=costs_dict.get("dividend_fee_max", 0.0),
-                        notes=costs_dict.get("notes", ""),
-                    )
+            for hc_name, hc in parsed_hidden.items():
+                HIDDEN_COSTS[hc_name] = hc
 
             # QA check: warn if any extracted rule produces 0 for all sizes
             from ..validation.fee_calculator import _compute_from_tiers, TRANSACTION_SIZES as TS
-            for (bk, ik), rule in list(all_rules.items()):
+            for (bk, ik, ek), rule in list(all_rules.items()):
                 if bk == broker_name.lower():
                     all_zero = all(
                         _compute_from_tiers(rule.tiers, amt, rule.handling_fee, rule.max_fee) == 0.0
@@ -2392,7 +2429,7 @@ IMPORTANT:
                             f"  QA WARNING: {rule.broker} {rule.instrument} extracted with all-zero fees. "
                             f"Tiers: {rule.tiers}. This rule will be skipped."
                         )
-                        del all_rules[(bk, ik)]
+                        del all_rules[(bk, ik, ek)]
                         broker_rule_count -= 1
 
             brokers_succeeded.append(broker_name)
@@ -2754,13 +2791,17 @@ def _build_chat_context() -> str:
     # Fee rules per broker/instrument
     lines.append("## Fee Rules")
     grouped: Dict[str, List[str]] = {}
-    for (broker_key, instr_key), rule in sorted(FEE_RULES.items()):
+    for (broker_key, instr_key, exch_key), rule in sorted(FEE_RULES.items()):
         display = _get_display_name(broker_key)
-        desc = f"  {instr_key}: pattern={rule.pattern}, tiers={rule.tiers}"
+        desc = f"  {instr_key} (exchange={exch_key}): pattern={rule.pattern}, tiers={rule.tiers}"
         if rule.handling_fee > 0:
             desc += f", handling=EUR{rule.handling_fee:.2f}"
         if rule.max_fee is not None:
             desc += f", max_fee=EUR{rule.max_fee:.2f}"
+        if rule.conditions:
+            desc += f", conditions={rule.conditions}"
+        if rule.notes:
+            desc += f", notes={rule.notes}"
         grouped.setdefault(display, []).append(desc)
 
     for broker_display, descs in sorted(grouped.items()):
@@ -2879,6 +2920,28 @@ def _precompute_fee_calculations(question: str) -> Optional[Dict[str, Any]]:
     if not instruments:
         instruments = ["stocks", "etfs"]  # default
 
+    # Detect exchange mentioned
+    EXCHANGE_KEYWORDS = {
+        "euronext brussels": "euronext_brussels",
+        "brussels": "euronext_brussels",
+        "euronext amsterdam": "euronext_amsterdam",
+        "amsterdam": "euronext_amsterdam",
+        "euronext paris": "euronext_paris",
+        "paris": "euronext_paris",
+        "nyse": "nyse",
+        "new york": "nyse",
+        "nasdaq": "nasdaq",
+        "xetra": "xetra",
+        "frankfurt": "xetra",
+        "lse": "lse",
+        "london": "lse",
+    }
+    detected_exchange = "all"
+    for keyword, exch in sorted(EXCHANGE_KEYWORDS.items(), key=lambda x: -len(x[0])):
+        if keyword in question_lower:
+            detected_exchange = exch
+            break
+
     # Compute fees
     results: Dict[str, Any] = {}
     for broker in found_brokers:
@@ -2886,9 +2949,9 @@ def _precompute_fee_calculations(question: str) -> Optional[Dict[str, Any]]:
         broker_results = {}
         for instrument in instruments:
             for amount in amounts:
-                fee = calculate_fee(broker, instrument, amount)
+                fee = calculate_fee(broker, instrument, amount, detected_exchange)
                 if fee is not None:
-                    explanation = generate_explanation(broker, instrument, amount)
+                    explanation = generate_explanation(broker, instrument, amount, detected_exchange)
                     key = f"{instrument}_EUR{int(amount)}"
                     broker_results[key] = {
                         "fee": fee,
@@ -2901,7 +2964,7 @@ def _precompute_fee_calculations(question: str) -> Optional[Dict[str, Any]]:
 
 
 CHAT_SYSTEM_PROMPT_TEMPLATE = """You are a helpful assistant specializing in Belgian broker fees and investment costs.
-You help users compare brokers on Euronext Brussels: Degiro Belgium, Bolero, Keytrade Bank, ING Self Invest, Rebel, and Revolut.
+You help users compare brokers on Euronext Brussels: Degiro Belgium, Bolero, Keytrade Bank, ING Self Invest, Rebel, Revolut, and Trade Republic.
 
 ## Data Context
 {context}
@@ -3091,7 +3154,7 @@ def _start_news_scrape_scheduler():
     if _EMAIL_SCHEDULER_ENABLED:
         logger.info(
             f"📧 Email report scheduler enabled — sends every Monday "
-            f"at {_EMAIL_SEND_HOUR_UTC:02d}:00 UTC"
+            f"at {_EMAIL_SEND_HOUR_CET:02d}:00 CET/CEST (Europe/Brussels)"
         )
         _schedule_next_email()
     else:
