@@ -83,13 +83,7 @@ _STYLES = """
     em { word-wrap: break-word; overflow-wrap: break-word; }
     .greeting { font-size: 16px; font-weight: 600; color: #111827; margin: 0 0 12px; }
     .intro { font-size: 14px; color: #374151; line-height: 1.7; margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid #e5e7eb; }
-    /* TL;DR summary card */
-    .summary-card { background: #fff7ed; border: 1px solid #fed7aa; padding: 16px 20px; margin-bottom: 32px; }
-    .summary-card-title { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #ea580c; margin: 0 0 10px; }
-    .summary-item { display: inline-block; margin: 0 28px 6px 0; vertical-align: top; }
-    .summary-label { font-size: 11px; color: #6b7280; display: block; margin-bottom: 2px; }
-    .summary-value { font-size: 15px; font-weight: 700; color: #111827; }
-    .section-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #FF6200; margin: 36px 0 4px; }
+.section-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #FF6200; margin: 36px 0 4px; }
     h2 { font-size: 18px; font-weight: 700; color: #111827; margin: 0 0 16px; }
     h3 { color: #111827; font-size: 14px; font-weight: 700; margin: 20px 0 10px; }
     .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 4px; }
@@ -135,56 +129,6 @@ _STYLES = """
     }
 """
 
-
-def _render_summary_card(all_stocks: dict, all_etfs: dict) -> str:
-    """Render a TL;DR highlights card showing cheapest brokers at a representative amount."""
-    preferred_amts = ["2500", "1000", "5000", "500", "250"]
-
-    def _cheapest_for(fee_data: dict) -> tuple[str, float, str] | None:
-        all_amts = {amt for fees in fee_data.values() for amt in fees}
-        target = next((a for a in preferred_amts if a in all_amts), None)
-        if not target:
-            target = max(all_amts, key=int) if all_amts else None
-        if not target:
-            return None
-        min_val: float | None = None
-        min_broker: str | None = None
-        for broker, fees in fee_data.items():
-            val = fees.get(target)
-            if val is not None and (min_val is None or val < min_val):
-                min_val = val
-                min_broker = broker
-        return (min_broker, min_val, target) if min_broker and min_val is not None else None
-
-    stocks_winner = _cheapest_for(all_stocks)
-    etfs_winner = _cheapest_for(all_etfs)
-    if not stocks_winner and not etfs_winner:
-        return ""
-
-    items = []
-    if stocks_winner:
-        broker, fee, amt = stocks_winner
-        items.append(
-            f'<span class="summary-item">'
-            f'<span class="summary-label">Cheapest stock trade at \u20ac{amt}</span>'
-            f'<span class="summary-value">{html.escape(broker)} \u2014 \u20ac{fee:.2f}</span>'
-            f'</span>'
-        )
-    if etfs_winner:
-        broker, fee, amt = etfs_winner
-        items.append(
-            f'<span class="summary-item">'
-            f'<span class="summary-label">Cheapest ETF trade at \u20ac{amt}</span>'
-            f'<span class="summary-value">{html.escape(broker)} \u2014 \u20ac{fee:.2f}</span>'
-            f'</span>'
-        )
-
-    return (
-        '<div class="summary-card">'
-        '<div class="summary-card-title">This week\'s highlights</div>'
-        + "".join(items)
-        + '</div>'
-    )
 
 
 def _render_fee_table(asset_label: str, fee_data: dict, calc_logic: dict | None = None) -> str:
@@ -374,36 +318,60 @@ def _split_notes(notes: str) -> list[str]:
     ]
 
 
-def _render_broker_notes(hidden_costs: dict) -> str:
+def _render_broker_notes(hidden_costs: dict, structured_notes: dict | None = None) -> str:
     """Render a broker notes section with investment-related notes as bullet lists.
 
     Args:
         hidden_costs: {broker_name: HiddenCosts dataclass or dict}
+        structured_notes: {broker_name: [{"category": ..., "label": ..., "description": ..., "highlight": ...}]}
+                          If provided, promotion items are rendered with bold red styling.
     """
     if not hidden_costs:
         return ""
 
-    blocks = []
+    promo_blocks = []
+    regular_blocks = []
     for broker, c in sorted(hidden_costs.items()):
         g = c if isinstance(c, dict) else c.__dict__
         raw_notes = g.get('notes', '')
         items = _split_notes(raw_notes)
-        if not items:
+
+        # Collect promotion items from structured notes (e.g. youth discounts)
+        promotion_bullets = ""
+        if structured_notes:
+            broker_structured = structured_notes.get(broker, [])
+            for note_item in broker_structured:
+                if note_item.get("category") == "promotion":
+                    desc = html.escape(note_item.get("description", ""))
+                    label = html.escape(note_item.get("label", ""))
+                    promotion_bullets += (
+                        f'<li style="margin-bottom:4px;">'
+                        f'<strong style="color:#dc2626;">{label}:</strong> '
+                        f'<strong style="color:#dc2626;">{desc}</strong>'
+                        f'</li>'
+                    )
+
+        if not items and not promotion_bullets:
             continue
         logo = _broker_logo_img(broker)
         bullets = "".join(
             f'<li style="margin-bottom:4px;">{_highlight_note(html.escape(item))}</li>'
             for item in items
         )
-        blocks.append(
+        block = (
             f'<div style="margin-bottom:20px;padding:16px 20px;background:#f9fafb;'
             f'border-radius:8px;border-left:3px solid #FF6200;">'
             f'<div style="font-weight:700;font-size:14px;color:#111827;margin-bottom:8px;">'
             f'{logo}{html.escape(broker)}</div>'
             f'<ul style="margin:0;padding-left:18px;font-size:12px;color:#374151;line-height:1.8;">'
-            f'{bullets}</ul>'
+            f'{promotion_bullets}{bullets}</ul>'
             f'</div>'
         )
+        if promotion_bullets:
+            promo_blocks.append(block)
+        else:
+            regular_blocks.append(block)
+    blocks = promo_blocks + regular_blocks
 
     if not blocks:
         return ""
@@ -524,8 +492,7 @@ def build_email_html(tables_data: dict) -> str:
             all_methodology.setdefault(broker, {}).update(meth)
 
     hidden_costs = tables_data.get("hidden_costs", {})
-
-    summary_card = _render_summary_card(all_stocks, all_etfs)
+    structured_notes = tables_data.get("structured_notes", None)
 
     fee_section = (
         '<p class="section-eyebrow">Fee Comparison</p>'
@@ -544,7 +511,7 @@ def build_email_html(tables_data: dict) -> str:
             all_etfs,
             etfs_logic,
         )
-        + _render_broker_notes(hidden_costs)
+        + _render_broker_notes(hidden_costs, structured_notes)
     )
 
     # Consolidated methodology appendix (moved out of per-table inline blocks)
@@ -577,17 +544,6 @@ def build_email_html(tables_data: dict) -> str:
     <p class="header-date">{now_str}</p>
   </div>
   <div class="content">
-    <p class="greeting">Hello,</p>
-    <p class="intro">
-      Here is this week&rsquo;s fee snapshot for Belgian retail brokers. All figures are
-      computed from published tariff schedules &mdash; no estimates, no guesswork.
-    </p>
-    <p class="coverage-note">
-      We are continuously expanding our coverage to include additional platforms and
-      exchanges relevant to Belgian retail investors. Expect new brokers and trading
-      venues to appear in upcoming editions as our data sources grow.
-    </p>
-    {summary_card}
     {fee_section}
     {methodology_appendix}
   </div>
@@ -600,6 +556,7 @@ def build_email_html(tables_data: dict) -> str:
     Full comparisons and personalised cost analysis at
     <a href="https://rajeshrai248.uk">rajeshrai248.uk</a>
     <div class="footer-legal">
+      All figures computed from published tariff schedules &mdash; no estimates, no guesswork.<br>
       For informational purposes only. Not financial advice.<br>
       Fee data is extracted and compiled by AI agents and may contain errors &mdash;
       always verify against official broker tariff schedules.<br>
@@ -699,6 +656,10 @@ def build_and_send_report(recipients_override: list[str] | None = None) -> dict:
     logger.info(f"Building comparison tables for {len(broker_keys)} brokers")
     tables = build_comparison_tables(broker_keys)
     tables["hidden_costs"] = dict(HIDDEN_COSTS)
+
+    # Include structured notes (with promotions from FEE_RULES conditions)
+    from .api.server import _build_structured_broker_notes
+    tables["structured_notes"] = _build_structured_broker_notes()
 
     html_body = build_email_html(tables)
 

@@ -26,7 +26,53 @@ except ImportError:  # pragma: no cover
     Anthropic = None  # type: ignore
 
 try:
-    from langfuse.decorators import observe, langfuse_context
+    # Support both Langfuse SDK v3 (langfuse>=3) and v2 (langfuse<3).
+    # SDK v3 removed langfuse.decorators; observe moved to the top-level package
+    # and langfuse_context was replaced by get_client().
+    try:
+        from langfuse import observe, get_client as _lf_get_client  # SDK v3
+
+        class _LFContextCompat:
+            """Maps v2 langfuse_context API to SDK v3 get_client()."""
+            _GEN_ONLY = frozenset({"model", "model_parameters", "usage_details", "cost_details"})
+
+            def update_current_observation(self, **kwargs):  # noqa: D401
+                from typing import Any  # noqa: PLC0415
+                lf = _lf_get_client()
+                if "usage" in kwargs:
+                    usage = dict(kwargs.pop("usage"))
+                    usage.pop("unit", None)
+                    if "total" not in usage:
+                        usage["total"] = (usage.get("input") or 0) + (usage.get("output") or 0)
+                    kwargs["usage_details"] = usage
+                if self._GEN_ONLY & set(kwargs):
+                    lf.update_current_generation(**kwargs)
+                else:
+                    lf.update_current_span(**kwargs)
+
+            def score_current_trace(self, **kwargs):
+                _lf_get_client().score_current_trace(**kwargs)
+
+        langfuse_context = _LFContextCompat()
+
+    except ImportError:
+        # SDK v2 fallback
+        from langfuse.decorators import observe, langfuse_context as _lf_ctx_v2
+
+        class _LFContextV2:  # noqa: E303
+            def update_current_observation(self, **kwargs):
+                if "usage" in kwargs and isinstance(kwargs["usage"], dict):
+                    u = kwargs["usage"]
+                    u.setdefault("unit", "TOKENS")
+                    if "total" not in u:
+                        u["total"] = (u.get("input") or 0) + (u.get("output") or 0)
+                _lf_ctx_v2.update_current_observation(**kwargs)
+
+            def score_current_trace(self, **kwargs):
+                _lf_ctx_v2.score_current_trace(**kwargs)
+
+        langfuse_context = _LFContextV2()
+
 except ImportError:  # pragma: no cover – langfuse is optional
     from functools import wraps
 

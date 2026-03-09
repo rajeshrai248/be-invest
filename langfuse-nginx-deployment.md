@@ -18,7 +18,7 @@ version: "3.8"
 
 services:
   langfuse-server:
-    image: langfuse/langfuse:2
+    image: langfuse/langfuse:3
     depends_on:
       langfuse-db:
         condition: service_healthy

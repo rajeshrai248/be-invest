@@ -3,6 +3,7 @@ from __future__ import annotations
 from dotenv import load_dotenv
 load_dotenv()
 
+import asyncio
 import hashlib
 import ipaddress
 import json
@@ -23,7 +24,81 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 
-from langfuse.decorators import observe, langfuse_context
+# ---------------------------------------------------------------------------
+# Langfuse SDK compatibility shim: works with both SDK v2 (langfuse<3) and
+# SDK v3 (langfuse>=3).  The decorator API changed significantly between the
+# two versions; this thin proxy normalises the differences so the rest of the
+# file can use the familiar v2 call-style unchanged.
+# ---------------------------------------------------------------------------
+try:
+    # SDK v3: langfuse.decorators was removed; observe moved to top-level.
+    from langfuse import observe, get_client as _lf_get_client  # type: ignore[assignment]
+
+    class _LangfuseContextProxy:  # noqa: E303
+        """Bridge SDK-v2 langfuse_context API to SDK-v3 get_client()."""
+        # Fields that only a Generation observation understands (not a Span).
+        _GEN_ONLY = frozenset(
+            {"model", "model_parameters", "usage_details", "cost_details", "completion_start_time"}
+        )
+
+        def update_current_observation(self, **kwargs: Any) -> None:
+            lf = _lf_get_client()
+            # Remap v2 'usage' dict → v3 'usage_details' (drop the 'unit' key).
+            if "usage" in kwargs:
+                usage = dict(kwargs.pop("usage"))
+                usage.pop("unit", None)
+                if "total" not in usage:
+                    usage["total"] = (usage.get("input") or 0) + (usage.get("output") or 0)
+                kwargs["usage_details"] = usage
+            # Route to the correct v3 method.
+            if self._GEN_ONLY & set(kwargs):
+                lf.update_current_generation(**kwargs)
+            else:
+                lf.update_current_span(**kwargs)
+
+        def update_current_trace(self, **kwargs: Any) -> None:
+            _lf_get_client().update_current_trace(**kwargs)
+
+        def score_current_trace(self, **kwargs: Any) -> None:
+            _lf_get_client().score_current_trace(**kwargs)
+
+        def flush(self) -> None:
+            _lf_get_client().flush()
+
+        def get_current_trace_id(self) -> Any:
+            return _lf_get_client().get_current_trace_id()
+
+    langfuse_context: Any = _LangfuseContextProxy()
+
+except ImportError:
+    # SDK v2 fallback: normalise usage dicts so they carry 'unit' and 'total'.
+    from langfuse.decorators import observe, langfuse_context as _lf_ctx_v2  # type: ignore[assignment]
+
+    class _LangfuseContextV2:  # noqa: E303
+        """Thin wrapper that injects 'unit'/'total' into v2 usage dicts."""
+
+        def update_current_observation(self, **kwargs: Any) -> None:
+            if "usage" in kwargs and isinstance(kwargs["usage"], dict):
+                u = kwargs["usage"]
+                u.setdefault("unit", "TOKENS")
+                if "total" not in u:
+                    u["total"] = (u.get("input") or 0) + (u.get("output") or 0)
+            _lf_ctx_v2.update_current_observation(**kwargs)
+
+        def update_current_trace(self, **kwargs: Any) -> None:
+            if hasattr(_lf_ctx_v2, "update_current_trace"):
+                _lf_ctx_v2.update_current_trace(**kwargs)
+
+        def score_current_trace(self, **kwargs: Any) -> None:
+            _lf_ctx_v2.score_current_trace(**kwargs)
+
+        def flush(self) -> None:
+            _lf_ctx_v2.flush()
+
+        def get_current_trace_id(self) -> Any:
+            return _lf_ctx_v2.get_current_trace_id()
+
+    langfuse_context: Any = _LangfuseContextV2()  # type: ignore[no-redef]
 
 from ..config_loader import load_brokers_from_yaml
 from ..models import Broker
@@ -336,6 +411,25 @@ def _build_structured_broker_notes() -> Dict[str, List[Dict[str, str]]]:
 
         notes[broker_name] = items
 
+    # 3. Scan FEE_RULES for conditional rules (e.g. youth discounts) and add as promotion notes
+    for (broker_key, instr_key, exch_key), rule in FEE_RULES.items():
+        if not rule.conditions:
+            continue
+        display = _get_display_name(broker_key)
+        if display not in notes:
+            notes[display] = []
+        for cond in rule.conditions:
+            if cond.get("type") == "age":
+                desc = f"Reduced {instr_key} fees for ages {cond.get('min_age', '')}-{cond.get('max_age', '')} (Youth discount)"
+                # Avoid duplicates
+                if not any(item.get("description") == desc for item in notes[display]):
+                    notes[display].append({
+                        "category": "promotion",
+                        "label": "Youth discount",
+                        "description": desc,
+                        "highlight": "advantage",
+                    })
+
     return notes
 
 
@@ -524,6 +618,17 @@ async def rate_limit_and_log(request: Request, call_next):
     _ip_request_counts[client_ip].append(current_time)
 
     # ====== CALL ENDPOINT ======
+    # Paths that use @observe and need an explicit flush (critical for serverless/Vercel
+    # where the shutdown event never fires and the background batch sender may be killed
+    # before it can dispatch buffered traces, causing "No data" for latency percentiles).
+    _OBSERVED_PATHS = {
+        "/chat",
+        "/cost-comparison-tables",
+        "/financial-analysis",
+        "/refresh-and-analyze",
+        "/news/scrape",
+    }
+
     try:
         response = await call_next(request)
         duration = time.time() - start_time
@@ -540,6 +645,14 @@ async def rate_limit_and_log(request: Request, call_next):
             logger.warning(log_msg)
         else:
             logger.info(log_msg)
+
+        # Flush Langfuse after every observed endpoint so traces (including timing)
+        # are delivered before Vercel reclaims the worker process.
+        if path in _OBSERVED_PATHS:
+            try:
+                await asyncio.to_thread(langfuse_context.flush)
+            except Exception as flush_err:
+                logger.warning(f"Langfuse flush failed: {flush_err}")
 
         return response
     except Exception as e:
@@ -570,6 +683,30 @@ _BRUSSELS_TZ = ZoneInfo("Europe/Brussels")
 _email_scheduler_timer: Optional[threading.Timer] = None
 _last_email_sent_at: Optional[datetime] = None
 _email_send_in_progress = False
+_EMAIL_LAST_SENT_FILE = Path("data") / "output" / ".last_email_sent"
+
+
+def _persist_last_email_sent(ts: datetime) -> None:
+    """Write last-sent timestamp to disk so it survives container restarts."""
+    global _last_email_sent_at
+    _last_email_sent_at = ts
+    try:
+        _EMAIL_LAST_SENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _EMAIL_LAST_SENT_FILE.write_text(ts.isoformat())
+    except OSError:
+        logger.warning("Could not persist last email sent timestamp to disk")
+
+
+def _load_last_email_sent() -> None:
+    """Restore last-sent timestamp from disk on startup."""
+    global _last_email_sent_at
+    try:
+        if _EMAIL_LAST_SENT_FILE.exists():
+            raw = _EMAIL_LAST_SENT_FILE.read_text().strip()
+            _last_email_sent_at = datetime.fromisoformat(raw)
+            logger.info(f"📧 Restored last email sent timestamp: {_last_email_sent_at}")
+    except (OSError, ValueError):
+        logger.warning("Could not restore last email sent timestamp from disk")
 
 
 def _build_news_response(brokers_processed: int, newly_scraped: int, brokers_to_scrape: Optional[List[str]] = None) -> dict:
@@ -691,7 +828,18 @@ def _schedule_next_email() -> None:
 
 def _run_scheduled_email_report() -> None:
     """Background job: build and send broker fee email report, then schedule the next one."""
-    global _last_email_sent_at, _email_send_in_progress
+    global _email_send_in_progress
+
+    # Deduplication: skip if an email was already sent today (same date in Brussels TZ)
+    today_brussels = datetime.now(_BRUSSELS_TZ).date()
+    if _last_email_sent_at is not None:
+        last_sent_date = _last_email_sent_at.astimezone(_BRUSSELS_TZ).date()
+        if last_sent_date == today_brussels:
+            logger.info(
+                f"📧 Email already sent today ({last_sent_date}), skipping duplicate"
+            )
+            _schedule_next_email()
+            return
 
     _email_send_in_progress = True
     logger.info("=" * 60)
@@ -701,7 +849,7 @@ def _run_scheduled_email_report() -> None:
     try:
         from ..email_sender import build_and_send_report
         result = build_and_send_report()
-        _last_email_sent_at = datetime.now(timezone.utc)
+        _persist_last_email_sent(datetime.now(timezone.utc))
         logger.info(f"✅ Email sent to {result['recipients']}")
     except Exception:
         logger.error("❌ Scheduled email report failed", exc_info=True)
@@ -816,7 +964,10 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
                     },
                 )
             else:
-                langfuse_context.update_current_observation(output=response.text)
+                langfuse_context.update_current_observation(
+                    output=response.text,
+                    usage={"input": 0, "output": 0},
+                )
 
             return response.text
 
@@ -874,7 +1025,10 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
                     },
                 )
             else:
-                langfuse_context.update_current_observation(output=result_text)
+                langfuse_context.update_current_observation(
+                    output=result_text,
+                    usage={"input": 0, "output": 0},
+                )
 
             return result_text
 
@@ -1046,7 +1200,10 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
                     },
                 )
             else:
-                langfuse_context.update_current_observation(output=result_text)
+                langfuse_context.update_current_observation(
+                    output=result_text,
+                    usage={"input": 0, "output": 0},
+                )
 
             return result_text
 
@@ -1057,6 +1214,7 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str, response_format:
             raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {str(e)}")
 
 
+@observe(as_type="span", capture_output=False)
 def _get_cost_analysis_data() -> Dict[str, Any]:
     """Helper to load the main cost analysis JSON."""
     output_dir = _default_output_dir()
@@ -1072,6 +1230,7 @@ def _get_cost_analysis_data() -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load analysis file: {exc}")
 
+@observe(as_type="span", capture_output=False)
 def _get_cost_comparison_data() -> Dict[str, Any]:
     """Helper to load the cost comparison analysis JSON."""
     output_dir = _default_output_dir()
@@ -1093,15 +1252,19 @@ def _submit_groundedness_evaluation(
     user_input: str,
     retrieved_context: str,
     generated_output: str,
+    review_threshold: float = 0.7,
 ) -> None:
     """
     Submit an async evaluation task for groundedness scoring.
     Logs results back to Langfuse trace AND creates evaluation record in Langfuse table.
+    When groundedness score < review_threshold, automatically adds the trace to the
+    human annotation queue for business-analyst review.
     Does not block the response.
     """
     try:
         import threading
         from ..evaluation import evaluate_groundedness_sync, create_langfuse_evaluation
+        from ..evaluation.llm_judge import add_trace_to_review_queue
 
         # Get current trace ID from Langfuse context (must capture before thread starts)
         trace_id = None
@@ -1148,6 +1311,14 @@ def _submit_groundedness_evaluation(
                         )
                         if reasoning:
                             logger.info(f"📝 [{endpoint}] Judge reasoning: {reasoning[:1000]}")
+
+                    # Auto-queue traces that fall below the review threshold for human annotation
+                    if score < review_threshold and trace_id:
+                        logger.info(
+                            f"🔍 [{endpoint}] Groundedness {score:.2f} < threshold {review_threshold} "
+                            f"— queuing trace {trace_id} for human review"
+                        )
+                        add_trace_to_review_queue(trace_id)
                 else:
                     logger.warning(f"⚠️ Groundedness evaluation failed (no result)")
             except Exception as e:
@@ -1225,6 +1396,8 @@ def get_cost_comparison_tables(
     if force and not _is_private_ip(_get_client_ip(request)):
         logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
         force = False
+
+    langfuse_context.update_current_trace(user_id="api", session_id=lang)
 
     # Cache key is language-agnostic (calculations never change with language)
     # Only use model in key since force=True regenerates everything
@@ -1403,6 +1576,7 @@ def get_cost_comparison_tables(
     return result
 
 
+@observe(as_type="span")
 def _generate_broker_notes(model: str, cost_data: Dict[str, Any], broker_names: List[str], lang: str = "en") -> Dict[str, str]:
     """Generate broker notes (hidden costs narrative) via LLM.
 
@@ -1551,9 +1725,11 @@ def generate_financial_analysis(
         cached = llm_cache.get(cache_key)
         if cached:
             logger.info(f"📦 Returning cached financial analysis for model: {model}, lang: {lang}")
+            langfuse_context.update_current_trace(user_id="api", session_id=lang)
             langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": True})
             return cached
 
+    langfuse_context.update_current_trace(user_id="api", session_id=lang)
     langfuse_context.update_current_observation(metadata={"model": model, "lang": lang, "force": force, "cache_hit": False})
     language_name = _get_language_name(lang)
 
@@ -2143,6 +2319,7 @@ def refresh_and_analyze(
         logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
         force = False
 
+    langfuse_context.update_current_trace(user_id="api")
     langfuse_context.update_current_observation(metadata={"model": model, "force": force})
 
     logger.info("=" * 80)
@@ -2782,6 +2959,7 @@ def delete_news_endpoint(request: NewsDeleteRequest) -> Dict[str, str]:
 _chat_context_cache: Dict[str, Any] = {"text": None, "expires_at": 0.0}
 
 
+@observe(as_type="span", capture_output=False)
 def _build_chat_context() -> str:
     """Build a compact text summary of all broker data for LLM context."""
     _ensure_rules_loaded()
@@ -2865,18 +3043,22 @@ def _build_chat_context() -> str:
     return "\n".join(lines)
 
 
+@observe(as_type="span", capture_output=False)
 def _get_chat_context() -> str:
     """Caching wrapper for _build_chat_context with 5-minute TTL."""
     now = time.time()
     if _chat_context_cache["text"] is not None and now < _chat_context_cache["expires_at"]:
+        langfuse_context.update_current_observation(metadata={"cache_hit": True})
         return _chat_context_cache["text"]
 
     text = _build_chat_context()
     _chat_context_cache["text"] = text
     _chat_context_cache["expires_at"] = now + 300  # 5 minutes
+    langfuse_context.update_current_observation(metadata={"cache_hit": False, "context_chars": len(text)})
     return text
 
 
+@observe(as_type="span")
 def _precompute_fee_calculations(question: str) -> Optional[Dict[str, Any]]:
     """Extract broker names, instruments, and EUR amounts from the question.
 
@@ -2996,6 +3178,9 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
     model = request.model or "groq/llama-3.3-70b-versatile"
     fallback_model = "gemini-2.0-flash"
     language_name = _get_language_name(request.lang or "en")
+    import hashlib as _hashlib
+    _session_key = _hashlib.md5(f"{request.question[:100]}{request.lang or 'en'}".encode()).hexdigest()[:12]
+    langfuse_context.update_current_trace(user_id="web-user", session_id=_session_key)
     langfuse_context.update_current_observation(metadata={"model": model, "lang": request.lang or "en"})
 
     # Build context
@@ -3108,11 +3293,54 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Failed to submit evaluation: {e}")
 
+    _trace_id = None
+    try:
+        _trace_id = langfuse_context.get_current_trace_id()
+    except Exception:
+        pass
+
     return {
         "answer": answer,
         "model_used": used_model,
         "pre_computed": pre_computed,
+        "trace_id": _trace_id,
     }
+
+
+# ========================================================================================
+# FEEDBACK ENDPOINT
+# ========================================================================================
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: str
+    rating: str  # "up" or "down"
+    comment: Optional[str] = None
+
+
+@app.post("/feedback", status_code=200)
+@time_api_call
+def submit_feedback(body: FeedbackRequest) -> Dict[str, Any]:
+    """Record user thumbs-up/down on a chat response and optionally queue for review."""
+    try:
+        from ..evaluation.llm_judge import _langfuse_client, add_trace_to_review_queue
+        value = 1.0 if body.rating == "up" else 0.0
+        if _langfuse_client:
+            _langfuse_client.score(
+                trace_id=body.trace_id,
+                name="user_feedback",
+                value=value,
+                comment=body.comment,
+                data_type="NUMERIC",
+            )
+            _langfuse_client.flush()
+            if body.rating == "down":
+                add_trace_to_review_queue(body.trace_id)
+                logger.info(f"Trace {body.trace_id} queued for review (thumbs-down)")
+        return {"status": "ok", "rating": body.rating}
+    except Exception as e:
+        logger.warning(f"Failed to record feedback: {e}")
+        return {"status": "error", "detail": str(e)}
 
 
 # ========================================================================================
@@ -3129,7 +3357,7 @@ def send_email_report(body: EmailSendRequest = Body(default=EmailSendRequest()))
     try:
         from ..email_sender import build_and_send_report
         result = build_and_send_report(recipients_override=body.recipients or None)
-        _last_email_sent_at = datetime.now(timezone.utc)
+        _persist_last_email_sent(datetime.now(timezone.utc))
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3152,6 +3380,7 @@ def _start_news_scrape_scheduler():
     timer.start()
 
     if _EMAIL_SCHEDULER_ENABLED:
+        _load_last_email_sent()
         logger.info(
             f"📧 Email report scheduler enabled — sends every Monday "
             f"at {_EMAIL_SEND_HOUR_CET:02d}:00 CET/CEST (Europe/Brussels)"
