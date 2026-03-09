@@ -757,14 +757,7 @@ def _build_broker_notes() -> Dict[str, str]:
     # Fallback statics for brokers with no hidden cost data
     _STATIC_NOTES = {
         "Bolero": "No custody fees for Belgian residents. Connectivity fee of EUR2.50/exchange/year.",
-        "Keytrade Bank": (
-            "No account or custody fees for private individuals. "
-            "Phone/fax orders: +EUR15 surcharge (online markets) or 1.40% min EUR49.95 (offline markets). "
-            "Bond secondary market (online): 0.20% min EUR29.95. "
-            "Youth account (18-26): EUR2.45 flat fee per Euronext transaction. "
-            "Real-time quotes: EUR2.50/month, free with 3+ executions/month. "
-            "Corporate custodian: 0.10% excluding VAT/year."
-        ),
+        "Keytrade Bank": "No account fees. Phone/international orders cost extra.",
         "Degiro Belgium": "EUR2 commission + EUR1 handling per trade. Connectivity fee EUR2.50/exchange/year.",
         "ING Self Invest": "Web/app: 0.35% min EUR1 (Euronext Brussels/Amsterdam/Paris), 0.50% min EUR1 (other exchanges). Branch/phone: 1% min EUR40. Bonds: 0.50% min EUR50.",
         "Rebel": "No custody fees for Belgian stocks. Non-Belgian dividend collection fee. Part of Belfius.",

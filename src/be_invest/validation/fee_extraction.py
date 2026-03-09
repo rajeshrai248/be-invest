@@ -72,7 +72,7 @@ Return a JSON object with EXACTLY this structure:
       "dividend_fee_pct": 0.0,
       "dividend_fee_min": 0.0,
       "dividend_fee_max": 0.0,
-      "notes": "Brief description of hidden costs"
+      "notes": "All conditional fees and surcharges found in the tariff: phone/fax order surcharges, age-based discounts (youth accounts), membership or loyalty programme pricing, real-time quote fees, corporate custodian charges, bond market fees, and any other non-standard rate that applies to a specific investor segment or order type."
     }}
   }}
 }}
@@ -153,13 +153,6 @@ COMMON LLM EXTRACTION ERRORS TO AVOID:
 - Keytrade Bank: stocks and ETFs/trackers have the SAME fee tiers on Euronext Brussels.
   Both use: EUR2.45 (0-250), EUR5.95 (250-2500), EUR14.95 (2500-10000), +EUR7.50 per additional EUR10000.
   The PDF confirms: "Trackers - Transactions at the same fee as for stock market transactions".
-  Bond secondary market (online): 0.20% with a minimum of EUR29.95.
-  Phone/fax orders add a EUR15 surcharge (online markets) or 1.40% min EUR49.95 (offline markets).
-  Always extract these as SEPARATE conditional rules: phone orders with
-  conditions=[{"type": "order_type", "order_type": "phone"}] and the standard online rule with conditions=[].
-  Youth account (ages 18-26): EUR2.45 flat fee per Euronext transaction — extract as a separate rule with
-  conditions=[{"type": "age", "min_age": 18, "max_age": 26}].
-  KeytradePlus members may receive reduced fees — extract as conditions=[{"type": "private_member", "membership": "keytradeplus"}].
 - Rebel: The standard stock fee on Euronext Brussels is EUR3 (up to EUR2500), then EUR10 per
   started EUR10000 slice. Do NOT confuse this with the youth (age 18-24) discount of EUR1 flat.
   Always extract the STANDARD rule (conditions=[]) separately from conditional rules.
