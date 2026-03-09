@@ -153,6 +153,13 @@ COMMON LLM EXTRACTION ERRORS TO AVOID:
 - Keytrade Bank: stocks and ETFs/trackers have the SAME fee tiers on Euronext Brussels.
   Both use: EUR2.45 (0-250), EUR5.95 (250-2500), EUR14.95 (2500-10000), +EUR7.50 per additional EUR10000.
   The PDF confirms: "Trackers - Transactions at the same fee as for stock market transactions".
+  Bond secondary market (online): 0.20% with a minimum of EUR29.95.
+  Phone/fax orders add a EUR15 surcharge (online markets) or 1.40% min EUR49.95 (offline markets).
+  Always extract these as SEPARATE conditional rules: phone orders with
+  conditions=[{"type": "order_type", "order_type": "phone"}] and the standard online rule with conditions=[].
+  Youth account (ages 18-26): EUR2.45 flat fee per Euronext transaction — extract as a separate rule with
+  conditions=[{"type": "age", "min_age": 18, "max_age": 26}].
+  KeytradePlus members may receive reduced fees — extract as conditions=[{"type": "private_member", "membership": "keytradeplus"}].
 - Rebel: The standard stock fee on Euronext Brussels is EUR3 (up to EUR2500), then EUR10 per
   started EUR10000 slice. Do NOT confuse this with the youth (age 18-24) discount of EUR1 flat.
   Always extract the STANDARD rule (conditions=[]) separately from conditional rules.
@@ -431,6 +438,12 @@ EURONEXT_BRUSSELS_CORRECT_RULES: Dict[tuple, dict] = {
         "tiers": [{"flat": 1.0}],
         "handling_fee": 0.0,
         "notes": "EUR1 flat fee per trade. Trade Republic bonds.",
+    },
+    ("Keytrade Bank", "bonds", "all"): {
+        "pattern": "percentage_with_min",
+        "tiers": [{"rate": 0.002, "min_fee": 29.95}],
+        "handling_fee": 0.0,
+        "notes": "Bond secondary market online: 0.20% x order amount (min EUR29.95). Keytrade Bank.",
     },
     ("Revolut", "stocks", "all"): {
         "pattern": "percentage_with_min",
