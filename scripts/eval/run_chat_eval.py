@@ -26,7 +26,25 @@ from pathlib import Path
 
 import requests
 from langfuse import Langfuse
-from langfuse.decorators import observe, langfuse_context
+try:
+    # SDK v3: langfuse.decorators was removed.
+    from langfuse import observe, get_client as _lf_get_client  # type: ignore[assignment]
+
+    class _LFContextProxy:
+        def update_current_observation(self, **kwargs):
+            lf = _lf_get_client()
+            if set(kwargs) & {"model", "usage_details", "usage"}:
+                if "usage" in kwargs:
+                    u = dict(kwargs.pop("usage"))
+                    u.pop("unit", None)
+                    kwargs["usage_details"] = u
+                lf.update_current_generation(**kwargs)
+            else:
+                lf.update_current_span(**kwargs)
+
+    langfuse_context = _LFContextProxy()
+except ImportError:
+    from langfuse.decorators import observe, langfuse_context  # type: ignore[assignment]  # SDK v2
 
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))

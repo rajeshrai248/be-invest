@@ -16,7 +16,7 @@ playwright>=1.45
 openai>=1.13.3
 anthropic>=0.40.0
 google-generativeai>=0.8.0
-langfuse>=2.0,<3
+langfuse>=3.0
 
 # API dependencies
 fastapi>=0.110

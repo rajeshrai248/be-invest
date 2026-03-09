@@ -42,3 +42,4 @@ docs/be_invest_presentation.pptx
 scripts/build_presentation.py
 scripts/test_pptx.py
 >>>>>>> e05dd0607f2a55507c0ad1ab70edc8b73ed19648
+.env.example

@@ -2,27 +2,89 @@ version: "3.8"
 
 services:
   langfuse-server:
-    image: langfuse/langfuse:2
+    image: langfuse/langfuse:3
     depends_on:
-      langfuse-db:
-        condition: service_healthy
+      - langfuse-db
+      - clickhouse
+      - redis
+      - minio
+      - minio-init
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
-      - NEXTAUTH_SECRET=mysecret
-      - SALT=mysalt
-      - ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000
-      - NEXTAUTH_URL=http://localhost:3000
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@langfuse-db:5432/${POSTGRES_DB}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - SALT=${SALT}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
       - TELEMETRY_ENABLED=false
+      # Auth
+      - AUTH_DISABLE_SIGNUP=false
+      # SMTP for password reset (Resend)
+      - SMTP_CONNECTION_URL=smtp://resend:${RESEND_API_KEY}@smtp.resend.com:587
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS}
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      # Langfuse v3 additions
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_AUTH=${REDIS_PASSWORD}
+      # Blob Storage (MinIO)
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=langfuse
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1
+      - CLICKHOUSE_CLUSTER_ENABLED=false
     restart: unless-stopped
+    networks:
+      - be-invest-network
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    depends_on:
+      - langfuse-db
+      - clickhouse
+      - redis
+      - minio
+      - minio-init
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@langfuse-db:5432/${POSTGRES_DB}
+      - SALT=${SALT}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - TELEMETRY_ENABLED=false
+      # Langfuse v3 additions
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_AUTH=${REDIS_PASSWORD}
+      # Blob Storage (MinIO)
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=langfuse
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+    restart: unless-stopped
+    networks:
+      - be-invest-network
 
   langfuse-db:
     image: postgres:15-alpine
     environment:
-      - POSTGRES_USER=langfuse
-      - POSTGRES_PASSWORD=langfuse
-      - POSTGRES_DB=langfuse
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     ports:
       - "5433:5432"
     volumes:
@@ -32,6 +94,87 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+    networks:
+      - be-invest-network
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    user: "101:101"
+    container_name: clickhouse
+    cap_add:
+      - SYS_NICE
+      - NET_ADMIN
+      - IPC_LOCK
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    ports:
+      - "8123:8123"
+      - "9002:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_log:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - be-invest-network
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - be-invest-network
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - be-invest-network
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+        mc mb --ignore-existing local/langfuse &&
+        echo 'MinIO bucket langfuse is ready.'
+      "
+    networks:
+      - be-invest-network
 
 volumes:
   langfuse_pgdata:
+  clickhouse_data:
+  clickhouse_log:
+  minio_data:
+
+networks:
+  be-invest-network:
+    driver: bridge
