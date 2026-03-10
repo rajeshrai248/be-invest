@@ -372,13 +372,17 @@ def create_langfuse_evaluation(
         if not trace_id:
             logger.warning("⚠️ No trace_id provided — score will be created but not linked to a trace")
 
-        eval_record = _langfuse_client.score(
-            trace_id=trace_id,
-            observation_id=None,
-            name="groundedness",
-            value=score,
-            comment=f"Endpoint: {endpoint} | Judge: {JUDGE_MODEL}\n\nReasoning: {reasoning[:500]}...",
-            data_type="NUMERIC",
+        from langfuse.api.resources.scores.types.create_score_request import CreateScoreRequest
+        from langfuse.api.resources.commons.types.score_data_type import ScoreDataType
+
+        eval_record = _langfuse_client.api.scores.create(
+            request=CreateScoreRequest(
+                trace_id=trace_id,
+                name="groundedness",
+                value=score,
+                comment=f"Endpoint: {endpoint} | Judge: {JUDGE_MODEL}\n\nReasoning: {reasoning[:500]}...",
+                data_type=ScoreDataType.NUMERIC,
+            )
         )
 
         # Flush to ensure the score is sent before the daemon thread exits

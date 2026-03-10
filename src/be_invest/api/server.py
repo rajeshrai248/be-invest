@@ -22,6 +22,7 @@ from typing import List, Optional, Dict, Any, Callable
 from fastapi import FastAPI, HTTPException, Query, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from pydantic import BaseModel, HttpUrl
 
 # ---------------------------------------------------------------------------
@@ -111,7 +112,7 @@ from ..validation.fee_calculator import (
     build_comparison_tables, BROKER_NOTES, load_fee_rules, save_fee_rules,
     get_rules_diff, FEE_RULES, FeeRule, HiddenCosts, HIDDEN_COSTS,
     _get_display_name, _build_broker_notes,
-    calculate_fee, generate_explanation, BROKER_ALIASES, _ensure_rules_loaded,
+    calculate_fee, generate_explanation, generate_methodology, BROKER_ALIASES, _ensure_rules_loaded,
 )
 from ..validation.persona_calculator import build_persona_comparison
 from ..validation.fee_extraction import (
@@ -433,10 +434,79 @@ def _build_structured_broker_notes() -> Dict[str, List[Dict[str, str]]]:
     return notes
 
 
+_DESCRIPTION_TRANSLATIONS: Dict[str, Dict[str, str]] = {
+    "fr-be": {
+        # broker notes descriptions
+        "Free": "Gratuit",
+        "Not disclosed": "Non divulgué",
+        "/month": "/mois",
+        "/year": "/an",
+        "/exchange/year": "/bourse/an",
+        "/trade": "/transaction",
+        "Youth discount": "Réduction jeunes",
+        "Reduced": "Réduit",
+        "fees for ages": "frais pour les âges",
+        # calculation_logic phrases (generate_explanation output)
+        "Flat fee": "Frais fixe",
+        "handling": "traitement",
+        "minimum": "minimum",
+        "Base fee": "Frais de base",
+        "amount": "montant",
+        "remainder": "reste",
+        "slices": "tranches",
+        "slice": "tranche",
+        "capped at": "plafonné à",
+        "No fee rule for": "Aucune règle de frais pour",
+        "Fee:": "Frais :",
+        "base": "base",
+        "per": "par",
+    },
+    "nl-be": {
+        # broker notes descriptions
+        "Free": "Gratis",
+        "Not disclosed": "Niet bekendgemaakt",
+        "/month": "/maand",
+        "/year": "/jaar",
+        "/exchange/year": "/beurs/jaar",
+        "/trade": "/transactie",
+        "Youth discount": "Jongerenkorting",
+        "Reduced": "Verlaagd",
+        "fees for ages": "kosten voor leeftijden",
+        # calculation_logic phrases (generate_explanation output)
+        "Flat fee": "Vast tarief",
+        "handling": "afwikkeling",
+        "minimum": "minimum",
+        "Base fee": "Basiskosten",
+        "amount": "bedrag",
+        "remainder": "restbedrag",
+        "slices": "schijven",
+        "slice": "schijf",
+        "capped at": "geplafonneerd op",
+        "No fee rule for": "Geen tariefregel voor",
+        "Fee:": "Kosten:",
+        "base": "basis",
+        "per": "per",
+    },
+}
+
+
+def _translate_description(description: str, lang: str) -> str:
+    """Translate a note description string using static substitutions.
+
+    Replaces longer phrases first to avoid partial matches
+    (e.g. 'order amount' before 'amount', 'handling/trade' before 'handling').
+    """
+    translations = _DESCRIPTION_TRANSLATIONS.get(lang, {})
+    result = description
+    for en_text, translated in sorted(translations.items(), key=lambda x: len(x[0]), reverse=True):
+        result = result.replace(en_text, translated)
+    return result
+
+
 def _localize_structured_notes(
     notes: Dict[str, List[Dict[str, str]]], lang: str
 ) -> Dict[str, List[Dict[str, str]]]:
-    """Translate labels in structured notes to the target language."""
+    """Translate labels and descriptions in structured notes to the target language."""
     if lang == "en":
         return notes
     labels = _NOTE_LABELS.get(lang, _NOTE_LABELS["en"])
@@ -447,6 +517,8 @@ def _localize_structured_notes(
             cat = item.get("category", "other")
             if cat in labels:
                 item["label"] = labels[cat]
+            if "description" in item:
+                item["description"] = _translate_description(item["description"], lang)
     return localized
 
 
@@ -456,6 +528,9 @@ def _localize_structured_notes(
 
 app = FastAPI(title="be-invest PDF Text API", version="0.1.0")
 logger = logging.getLogger(__name__)
+
+# Trust X-Forwarded-For from nginx/cloudflared tunnel so real external IPs are logged
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["127.0.0.1", "192.168.129.3"])
 
 # CORS: use CORS_ORIGINS env var for production (comma-separated), defaults to * for dev
 _cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
@@ -1434,26 +1509,21 @@ def get_cost_comparison_tables(
 
     # Build fee tables deterministically (no LLM needed)
     result = build_comparison_tables(broker_names)
+    # Bonds excluded from results for now
+    result["euronext_brussels"].pop("bonds", None)
 
-    # Generate structured notes with localized labels (no LLM needed)
+    # Generate structured notes in English (localization applied later, after caching)
     structured_notes = _build_structured_broker_notes()
     notes = {_get_display_name(name): structured_notes.get(_get_display_name(name), []) for name in broker_names}
-    notes = _localize_structured_notes(notes, lang)
     result["euronext_brussels"]["notes"] = notes
 
-    # Add investor persona comparison
+    # Add investor persona comparison (English, localization applied after caching)
     persona_success = False
     try:
         persona_data = build_persona_comparison(broker_names)
         result["euronext_brussels"]["investor_personas"] = persona_data["investor_personas"]
         result["euronext_brussels"]["persona_definitions"] = persona_data["persona_definitions"]
         persona_success = True
-
-        # Localize persona definitions for non-English
-        if lang != "en":
-            result["euronext_brussels"]["persona_definitions"] = _localize_persona_definitions(
-                model, result["euronext_brussels"]["persona_definitions"], lang
-            )
     except Exception as e:
         logger.warning(f"Persona calculation failed (non-fatal): {e}")
 
@@ -1462,7 +1532,7 @@ def get_cost_comparison_tables(
     cells_with_data = 0
     pricing_tiers_found = set()
 
-    for asset_type in ["stocks", "etfs", "bonds"]:
+    for asset_type in ["stocks", "etfs"]:
         asset_data = result["euronext_brussels"].get(asset_type, {})
         for broker_name, broker_fees in asset_data.items():
             cells_computed += len(broker_fees)
@@ -1481,7 +1551,7 @@ def get_cost_comparison_tables(
     pricing_coverage = {
         "total_tiers": len(pricing_tiers_found),
         "brokers_covered": len(broker_names),
-        "asset_types": ["stocks", "etfs", "bonds"]
+        "asset_types": ["stocks", "etfs"]
     }
 
     result["_validation"] = {
@@ -1672,10 +1742,17 @@ def _localize_cost_comparison_response(result: Dict[str, Any], lang: str) -> Dic
         calc_logic = localized["euronext_brussels"]["calculation_logic"]
         for broker_name, broker_calc in calc_logic.items():
             for asset_type, asset_calc in broker_calc.items():
-                for amount_str, explanation_en in asset_calc.items():
-                    # For now, keep English explanations - could add translation layer here
-                    # Full translation would use LLM or static translation dictionary
-                    pass
+                for amount_str in list(asset_calc.keys()):
+                    asset_calc[amount_str] = _translate_description(asset_calc[amount_str], lang)
+
+    # Regenerate methodology descriptions in target language
+    if "methodology" in localized.get("euronext_brussels", {}):
+        meth = localized["euronext_brussels"]["methodology"]
+        for broker_name, broker_meth in meth.items():
+            for asset_type in list(broker_meth.keys()):
+                translated = generate_methodology(broker_name, asset_type, "euronext_brussels", lang=lang)
+                if translated:
+                    broker_meth[asset_type] = translated
     
     # Translate persona definitions
     if "persona_definitions" in localized.get("euronext_brussels", {}):

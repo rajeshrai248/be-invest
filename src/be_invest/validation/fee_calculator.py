@@ -563,11 +563,50 @@ def generate_explanation(broker: str, instrument: str, amount: float, exchange: 
     return f"Fee: EUR{expected:.2f}"
 
 
-def generate_methodology(broker: str, instrument: str, exchange: str = "all") -> str:
+_METHODOLOGY_STRINGS = {
+    "en": {
+        "flat_fee": "Flat fee:",
+        "handling": "handling/trade",
+        "order_amount": "order amount",
+        "min": "min",
+        "max": "max",
+        "base": "base",
+        "then": "then",
+        "per_started_slice": "per started €{per_slice:,} slice",
+        "custom": "Custom fee structure",
+    },
+    "nl-be": {
+        "flat_fee": "Vast tarief:",
+        "handling": "afwikkeling/transactie",
+        "order_amount": "orderbedrag",
+        "min": "min.",
+        "max": "max.",
+        "base": "basis",
+        "then": "dan",
+        "per_started_slice": "per begonnen schijf van €{per_slice:,}",
+        "custom": "Aangepaste tariefstructuur",
+    },
+    "fr-be": {
+        "flat_fee": "Frais fixe :",
+        "handling": "traitement/transaction",
+        "order_amount": "montant de l'ordre",
+        "min": "min.",
+        "max": "max.",
+        "base": "base",
+        "then": "puis",
+        "per_started_slice": "par tranche entamée de €{per_slice:,}",
+        "custom": "Structure tarifaire personnalisée",
+    },
+}
+
+
+def generate_methodology(broker: str, instrument: str, exchange: str = "all",
+                         lang: str = "en") -> str:
     """Generate a concise fee formula description for a broker/instrument.
 
     Returns a one-line summary of the fee structure (not a per-amount calculation).
-    Used for static methodology reference in email reports.
+    Used for static methodology reference in email reports and UI cards.
+    Supports lang: en, nl-be, fr-be.
     """
     _ensure_rules_loaded()
     norm_broker = _normalize_broker(broker)
@@ -579,30 +618,32 @@ def generate_methodology(broker: str, instrument: str, exchange: str = "all") ->
     if rule is None:
         return ""
 
+    s = _METHODOLOGY_STRINGS.get(lang, _METHODOLOGY_STRINGS["en"])
     tiers = rule.tiers
 
     # Simple flat
     if len(tiers) == 1 and "flat" in tiers[0]:
-        parts = [f"Flat fee: \u20ac{tiers[0]['flat']:.2f}"]
+        parts = [f"{s['flat_fee']} €{tiers[0]['flat']:.2f}"]
         if rule.handling_fee > 0:
-            parts.append(f"+ \u20ac{rule.handling_fee:.2f} handling/trade")
+            parts.append(f"+ €{rule.handling_fee:.2f} {s['handling']}")
         return " ".join(parts)
 
     # Percentage with min
     if len(tiers) == 1 and "rate" in tiers[0]:
         rate_pct = tiers[0]["rate"] * 100
-        desc = f"{rate_pct:.2f}% \u00d7 order amount"
+        desc = f"{rate_pct:.2f}% × {s['order_amount']}"
         min_f = tiers[0].get("min_fee", 0.0)
         if min_f:
-            desc += f" (min \u20ac{min_f:.2f})"
+            desc += f" ({s['min']} €{min_f:.2f})"
         return desc
 
     # Base + slice
     if len(tiers) == 1 and "base_up_to" in tiers[0]:
         tier = tiers[0]
+        slice_str = s["per_started_slice"].format(per_slice=tier["per_slice"])
         return (
-            f"\u20ac{tier['base_fee']:.2f} base (\u2264\u20ac{tier['base_up_to']:,.0f}), "
-            f"then +\u20ac{tier['slice_fee']:.2f} per started \u20ac{tier['per_slice']:,} slice"
+            f"€{tier['base_fee']:.2f} {s['base']} (≤€{tier['base_up_to']:,.0f}), "
+            f"{s['then']} +€{tier['slice_fee']:.2f} {slice_str}"
         )
 
     # Tiered flat + optional rate / slice / base_slice
@@ -613,30 +654,32 @@ def generate_methodology(broker: str, instrument: str, exchange: str = "all") ->
 
     tier_parts = []
     for tier in flat_tiers:
-        tier_parts.append(f"\u20ac{tier['fee']:.2f} (\u2264\u20ac{tier['up_to']:,.0f})")
+        tier_parts.append(f"€{tier['fee']:.2f} (≤€{tier['up_to']:,.0f})")
 
     if base_slice_tiers:
         bt = base_slice_tiers[0]
+        slice_str = s["per_started_slice"].format(per_slice=bt["per_slice"])
         tier_parts.append(
-            f"\u20ac{bt['base_fee']:.2f} base (\u2264\u20ac{bt['base_up_to']:,.0f}), "
-            f"then +\u20ac{bt['slice_fee']:.2f} per started \u20ac{bt['per_slice']:,} slice"
+            f"€{bt['base_fee']:.2f} {s['base']} (≤€{bt['base_up_to']:,.0f}), "
+            f"{s['then']} +€{bt['slice_fee']:.2f} {slice_str}"
         )
-        return ", ".join(tier_parts) if tier_parts else "Custom fee structure"
+        return ", ".join(tier_parts) if tier_parts else s["custom"]
 
     # Rate tier takes priority over per_slice in methodology description
     if rate_tiers:
         rt = rate_tiers[0]
         rate_pct = rt["rate"] * 100
-        tier_parts.append(f"then {rate_pct:.2f}% \u00d7 order amount")
+        tier_parts.append(f"{s['then']} {rate_pct:.2f}% × {s['order_amount']}")
     elif slice_tiers:
         st = slice_tiers[0]
-        slice_desc = f"then \u20ac{st['fee']:.2f} per started \u20ac{st['per_slice']:,} slice"
+        slice_str = s["per_started_slice"].format(per_slice=st["per_slice"])
+        slice_desc = f"{s['then']} €{st['fee']:.2f} {slice_str}"
         effective_max = st.get("max_fee") or rule.max_fee
         if effective_max:
-            slice_desc += f" (max \u20ac{effective_max:.2f})"
+            slice_desc += f" ({s['max']} €{effective_max:.2f})"
         tier_parts.append(slice_desc)
 
-    return ", ".join(tier_parts) if tier_parts else "Custom fee structure"
+    return ", ".join(tier_parts) if tier_parts else s["custom"]
 
 
 # ========================================================================================
@@ -661,11 +704,13 @@ def _get_display_name(broker: str) -> str:
     return _CANONICAL_NAMES.get(normalized, broker)
 
 
-def build_comparison_tables(broker_names: List[str], exchange: str = "euronext_brussels") -> dict:
+def build_comparison_tables(broker_names: List[str], exchange: str = "euronext_brussels",
+                            lang: str = "en") -> dict:
     """Build complete comparison table structure for a given exchange.
 
     Returns dict with stocks/etfs/bonds fee matrices + calculation_logic.
     Notes field is left empty (populated by LLM or fallback separately).
+    lang: en, nl-be, fr-be — controls methodology text language.
     """
     _ensure_rules_loaded()
 
@@ -694,7 +739,7 @@ def build_comparison_tables(broker_names: List[str], exchange: str = "euronext_b
             if fees:
                 target_dict[display] = fees
                 calc_broker[asset_type] = calc_asset
-                meth = generate_methodology(broker, asset_type, exchange)
+                meth = generate_methodology(broker, asset_type, exchange, lang=lang)
                 if meth:
                     meth_broker[asset_type] = meth
 
