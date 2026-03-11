@@ -583,6 +583,14 @@ def _is_private_ip(ip_str: str) -> bool:
         return False
 
 
+def _suppress_remote_force(request: Request, force: bool) -> bool:
+    """Silently suppress force=True from non-local IPs, returning False instead."""
+    if force and not _is_private_ip(_get_client_ip(request)):
+        logger.info(f"force=True suppressed for non-local IP {_get_client_ip(request)}")
+        return False
+    return force
+
+
 # ========================================================================================
 # TIMING UTILITIES
 # ========================================================================================
@@ -1468,9 +1476,7 @@ def get_cost_comparison_tables(
     Only text content (notes, explanations) is localized per language.
     This avoids redundant calculation when lang changes.
     """
-    if force and not _is_private_ip(_get_client_ip(request)):
-        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
-        force = False
+    force = _suppress_remote_force(request, force)
 
     langfuse_context.update_current_trace(user_id="api", session_id=lang)
 
@@ -1792,9 +1798,7 @@ def generate_financial_analysis(
 
     Perfect for React/Vue/Angular apps to render with custom styling.
     """
-    if force and not _is_private_ip(_get_client_ip(request)):
-        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
-        force = False
+    force = _suppress_remote_force(request, force)
 
     # Check cache first (unless force=True)
     cache_key = FileCache.make_key("financial_analysis", model, lang)
@@ -2148,9 +2152,7 @@ def refresh_pdfs(
         save_dir: Optional[str] = Query(None,
                                         description="Directory to save extracted text (default: data/output/pdf_text)"),
 ) -> Dict[str, Any]:
-    if force and not _is_private_ip(_get_client_ip(request)):
-        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
-        force = False
+    force = _suppress_remote_force(request, force)
 
     brokers_yaml = _default_brokers_yaml()
     if not brokers_yaml.exists():
@@ -2392,9 +2394,7 @@ def refresh_and_analyze(
     """
     import time
 
-    if force and not _is_private_ip(_get_client_ip(request)):
-        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
-        force = False
+    force = _suppress_remote_force(request, force)
 
     langfuse_context.update_current_trace(user_id="api")
     langfuse_context.update_current_observation(metadata={"model": model, "force": force})
@@ -2724,9 +2724,7 @@ def scrape_news_endpoint(
     """
     import time
 
-    if force and not _is_private_ip(_get_client_ip(request)):
-        logger.info(f"force=True ignored for public IP {_get_client_ip(request)}")
-        force = False
+    force = _suppress_remote_force(request, force)
 
     start_time = time.time()
 
