@@ -21,12 +21,8 @@ flowchart TD
     %% LAYER 2 — API Endpoints
     subgraph ENDPOINTS["🔌 REST API Endpoints (FastAPI)"]
         direction LR
-        EP1["📥 POST /refresh-and-analyze"]
-        EP2["📊 GET /cost-comparison-tables"]
-        EP3["💬 POST /chat"]
-        EP4["📰 GET /news"]
-        EP5["📈 GET /financial-analysis"]
-        EP6["📧 POST /send-email-report"]
+        EP1["📥 /refresh-and-analyze"] ~~~ EP2["📊 /cost-comparison-tables"] ~~~ EP3["💬 /chat"]
+        EP4["📰 /news"] ~~~ EP5["📈 /financial-analysis"] ~~~ EP6["📧 /send-email-report"]
     end
 
     %% LAYER 3 — Data Ingestion Pipeline
