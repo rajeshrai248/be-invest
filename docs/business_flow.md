@@ -7,228 +7,124 @@
 
 ```mermaid
 flowchart TD
-
-    %% ══════════════════════════════════════════════════════
     %% ACTORS
-    %% ══════════════════════════════════════════════════════
+    USER(["🧑‍💻 End User"])
+    ADMIN(["🔧 Administrator"])
+    SUB(["📬 Email Subscribers"])
 
-    USER(["🧑‍💻  End User\nFrontend / Mobile App"])
-    ADMIN(["🔧  Administrator\nManual Trigger"])
-    SUB(["📬  Email Subscribers\nWeekly Recipients"])
-
-    %% ══════════════════════════════════════════════════════
-    %% LAYER 1 — SECURITY & API GATEWAY
-    %% ══════════════════════════════════════════════════════
-
-    subgraph GATEWAY["  🔒  Security & API Gateway  "]
+    %% LAYER 1 — Security & API Gateway
+    subgraph GATEWAY["🔒 Security & API Gateway"]
         direction TB
-        RL["Rate Limiter\nBlocks suspicious IPs,\nlimits requests/min"]
-        CORS["CORS Guard\nAllows only approved\nfrontend origins"]
-        RL --> CORS
+        RL["Rate Limiter"] --> CORS["CORS Guard"]
     end
 
-    %% ══════════════════════════════════════════════════════
-    %% LAYER 2 — API ENDPOINTS
-    %% ══════════════════════════════════════════════════════
-
-    subgraph ENDPOINTS["  🔌  REST API Endpoints  (FastAPI)  "]
+    %% LAYER 2 — API Endpoints
+    subgraph ENDPOINTS["🔌 REST API Endpoints (FastAPI)"]
         direction LR
-        EP1["📥  POST\n/refresh-and-analyze\nRebuild fee rules\nfrom broker sources"]
-        EP2["📊  GET\n/cost-comparison-tables\nFee tables for all\nbrokers & amounts"]
-        EP3["💬  POST\n/chat\nAI-powered Q&A\nchatbot"]
-        EP4["📰  GET\n/news\nBroker news &\nmarket updates"]
-        EP5["📈  GET\n/financial-analysis\nPortfolio cost\nnarrative"]
-        EP6["📧  POST\n/send-email-report\nManual email\ntrigger"]
+        EP1["📥 POST /refresh-and-analyze"]
+        EP2["📊 GET /cost-comparison-tables"]
+        EP3["💬 POST /chat"]
+        EP4["📰 GET /news"]
+        EP5["📈 GET /financial-analysis"]
+        EP6["📧 POST /send-email-report"]
     end
 
-    %% ══════════════════════════════════════════════════════
-    %% LAYER 3 — DATA INGESTION PIPELINE
-    %% ══════════════════════════════════════════════════════
-
-    subgraph INGESTION["  📥  Data Ingestion Pipeline  "]
+    %% LAYER 3 — Data Ingestion Pipeline
+    subgraph INGESTION["📥 Data Ingestion Pipeline"]
         direction TB
-        BROKERS["🏦  Belgian Broker Sources\nDegiro · Bolero · Keytrade\nING · Rebel · Revolut · Trade Republic\n\nWebsites & Published PDFs"]
-
-        SCRAPER["🕷️  Web Scraper\nPlaywright + Requests\nDownloads fee tariff PDFs\nand public web pages"]
-
-        LLM_EXTRACT["🤖  AI Extraction\nGPT-4o  ·  temp=0.0\nReads raw PDF text,\nextracts fee records as JSON"]
-
-        LLM_STRUCT["🤖  AI Structuring\nClaude Sonnet  ·  temp=0.0\nConverts raw records into\nvalidated fee rule objects"]
-
-        FEE_DB[("💾  fee_rules.json\nCentral Fee Rules Store\nBroker × Instrument × Exchange\nFee patterns + hidden costs")]
-
-        BROKERS -->|"Tariff PDFs & web pages"| SCRAPER
-        SCRAPER -->|"Raw text content"| LLM_EXTRACT
-        LLM_EXTRACT -->|"Structured fee records"| LLM_STRUCT
-        LLM_STRUCT -->|"Validated fee rules & hidden costs"| FEE_DB
+        BROKERS["🏦 Belgian Brokers\nDegiro · Bolero · Keytrade\nING · Rebel · Revolut · Trade Republic"]
+        SCRAPER["🕷️ Web Scraper\nPlaywright + Requests"]
+        LLM_EXTRACT["🤖 AI Extraction\nGPT-4o · temp=0.0"]
+        LLM_STRUCT["🤖 AI Structuring\nClaude Sonnet · temp=0.0"]
+        FEE_DB[("💾 fee_rules.json")]
+        BROKERS -->|"PDFs & pages"| SCRAPER -->|"Raw text"| LLM_EXTRACT
+        LLM_EXTRACT -->|"Fee records"| LLM_STRUCT -->|"Validated rules"| FEE_DB
     end
 
-    %% ══════════════════════════════════════════════════════
-    %% LAYER 4 — DETERMINISTIC FEE ENGINE
-    %% ══════════════════════════════════════════════════════
-
-    subgraph ENGINE["  ⚙️  Deterministic Fee Engine  "]
+    %% LAYER 4 — Deterministic Fee Engine
+    subgraph ENGINE["⚙️ Deterministic Fee Engine"]
         direction TB
-        FEE_CALC["🧮  Fee Calculator\nPure Python — no AI\nComputes exact fees using rule patterns:\nflat · tiered · percentage · base+slice"]
-
-        PERSONA["👤  Persona Calculator\nProfiles 3 investor types:\nPassive Investor · Moderate · Active Trader\nAnnual Total Cost of Ownership (TCO)"]
-
-        TABLES["📋  Comparison Tables\nFee matrix for all\namount sizes (€50 – €50,000)\nacross all 7 brokers"]
-
-        NOTES["📝  Broker Notes Builder\nHidden costs summary:\ncustody · FX · connectivity\ndividend · subscription fees"]
-
-        FEE_CALC --> TABLES
-        FEE_CALC --> PERSONA
-        FEE_CALC --> NOTES
+        FEE_CALC["🧮 Fee Calculator\nflat · tiered · % · base+slice"]
+        PERSONA["👤 Persona Calculator\nPassive · Moderate · Active"]
+        TABLES["📋 Comparison Tables\n€50 – €50k × 7 brokers"]
+        NOTES["📝 Broker Notes\ncustody · FX · connectivity"]
+        FEE_CALC --> TABLES & PERSONA & NOTES
     end
 
-    %% ══════════════════════════════════════════════════════
-    %% LAYER 5 — AI SERVICES
-    %% ══════════════════════════════════════════════════════
-
-    subgraph AI["  🤖  AI Services  "]
+    %% LAYER 5 — AI Services
+    subgraph AI["🤖 AI Services"]
         direction TB
-        AI_CHAT["💬  Chat AI\nGroq / Llama 3.3 70B  ·  temp=0.3\nNatural language answers\nGrounded in pre-computed fees"]
-
-        AI_ANALYSIS["📈  Analysis AI\nClaude Sonnet  ·  temp=0.0\nNarrative portfolio analysis\nbased on fee tables & TCO rankings"]
+        AI_CHAT["💬 Chat AI\nGroq / Llama 3.3 70B"]
+        AI_ANALYSIS["📈 Analysis AI\nClaude Sonnet"]
     end
 
-    %% ══════════════════════════════════════════════════════
-    %% LAYER 6 — NEWS INTELLIGENCE
-    %% ══════════════════════════════════════════════════════
-
-    subgraph NEWS_SYS["  📰  News Intelligence  "]
+    %% LAYER 6 — News Intelligence
+    subgraph NEWS_SYS["📰 News Intelligence"]
         direction TB
-        NEWS_SCHED["⏰  Auto-Scheduler\nRuns every 24 hours\nin background thread"]
-
-        NEWS_SCRAPER["🕷️  News Scraper\nFetches broker announcements,\npress releases & market news"]
-
-        NEWS_STORE[("💾  news.jsonl\nNews Store\nPersistent log of\nall broker news items")]
-
-        NEWS_CACHE["⚡  File Cache\n24-hour TTL\nAvoids redundant\nscraping"]
-
-        NEWS_SCHED -->|"Triggers every 24h"| NEWS_SCRAPER
-        NEWS_SCRAPER -->|"Saves new articles"| NEWS_STORE
-        NEWS_STORE -->|"Cached for serving"| NEWS_CACHE
+        NEWS_SCHED["⏰ Auto-Scheduler (24h)"]
+        NEWS_SCRAPER["🕷️ News Scraper"]
+        NEWS_STORE[("💾 news.jsonl")]
+        NEWS_CACHE["⚡ File Cache (24h TTL)"]
+        NEWS_SCHED -->|"24h trigger"| NEWS_SCRAPER -->|"Save"| NEWS_STORE -->|"Cache"| NEWS_CACHE
     end
 
-    %% ══════════════════════════════════════════════════════
-    %% LAYER 7 — EMAIL SERVICE
-    %% ══════════════════════════════════════════════════════
-
-    subgraph EMAIL_SYS["  📧  Weekly Email Reports  "]
+    %% LAYER 7 — Email Service
+    subgraph EMAIL_SYS["📧 Weekly Email Reports"]
         direction TB
-        EMAIL_SCHED["⏰  Weekly Scheduler\nEvery Monday 09:00 UTC\nBackground daemon thread"]
-
-        EMAIL_BUILD["🏗️  HTML Report Builder\nAssembles fee comparison tables,\nTCO persona rankings,\nand broker logo banners"]
-
-        SMTP["📮  Gmail SMTP\nTLS-encrypted delivery\nto subscriber list"]
-
-        EMAIL_SCHED -->|"Fires on schedule"| EMAIL_BUILD
-        EMAIL_BUILD -->|"Sends HTML email"| SMTP
+        EMAIL_SCHED["⏰ Weekly (Mon 09:00 UTC)"]
+        EMAIL_BUILD["🏗️ HTML Report Builder"]
+        SMTP["📮 Gmail SMTP"]
+        EMAIL_SCHED -->|"Schedule"| EMAIL_BUILD -->|"Send"| SMTP
     end
 
-    %% ══════════════════════════════════════════════════════
-    %% LAYER 8 — QUALITY ASSURANCE
-    %% ══════════════════════════════════════════════════════
-
-    subgraph QA["  ✅  AI Quality Assurance  "]
+    %% LAYER 8 — Quality Assurance
+    subgraph QA["✅ AI Quality Assurance"]
         direction LR
-        JUDGE["⚖️  LLM-as-Judge\nGemini 2.5 Pro\nEvaluates all AI responses\nfor factual groundedness"]
-
-        LANGFUSE["📊  Langfuse Observability\nScores: 0.0 = hallucination\n0.5 = partial  ·  1.0 = grounded\nAll LLM calls traced & scored"]
-
-        JUDGE -->|"Groundedness score (0–1)"| LANGFUSE
+        JUDGE["⚖️ LLM-as-Judge\nGemini 2.5 Pro"] -->|"Score 0–1"| LANGFUSE["📊 Langfuse\nObservability"]
     end
 
-    %% ══════════════════════════════════════════════════════
-    %% PRIMARY FLOWS — User to Gateway
-    %% ══════════════════════════════════════════════════════
+    %% PRIMARY FLOWS
+    USER -->|"Request"| RL
+    ADMIN -->|"Trigger"| RL
+    CORS --> EP1 & EP2 & EP3 & EP4 & EP5 & EP6
 
-    USER -->|"API request"| RL
-    ADMIN -->|"Trigger refresh\nor email"| RL
-    CORS -->|"Validated request"| EP1
-    CORS -->|"Validated request"| EP2
-    CORS -->|"Validated request"| EP3
-    CORS -->|"Validated request"| EP4
-    CORS -->|"Validated request"| EP5
-    CORS -->|"Validated request"| EP6
+    %% Flow A — Fee Refresh
+    EP1 -->|"Refresh"| INGESTION
 
-    %% ══════════════════════════════════════════════════════
-    %% FLOW A — Fee Rule Refresh
-    %% ══════════════════════════════════════════════════════
+    %% Flow B — Cost Tables
+    EP2 -->|"Load"| FEE_CALC
+    FEE_DB -->|"Rules"| FEE_CALC
+    TABLES & PERSONA & NOTES -->|"Results"| EP2 -->|"Tables + notes"| USER
 
-    EP1 -->|"Kick off pipeline"| INGESTION
+    %% Flow C — Chat
+    EP3 --> FEE_CALC -->|"Fees"| AI_CHAT
+    FEE_DB -->|"Context"| AI_CHAT -->|"Answer"| EP3 -->|"Response"| USER
 
-    %% ══════════════════════════════════════════════════════
-    %% FLOW B — Cost Comparison Tables
-    %% ══════════════════════════════════════════════════════
+    %% Flow D — Analysis
+    EP5 --> TABLES -->|"Data"| AI_ANALYSIS -->|"Report"| EP5 -->|"Analysis"| USER
 
-    EP2 -->|"Load rules"| FEE_CALC
-    FEE_DB -->|"Fee rules & hidden costs"| FEE_CALC
-    TABLES -->|"Fee matrix"| EP2
-    PERSONA -->|"TCO rankings"| EP2
-    NOTES -->|"Hidden cost notes"| EP2
-    EP2 -->|"Returns tables + notes"| USER
+    %% Flow E — News
+    EP4 --> NEWS_CACHE -->|"Articles"| EP4 -->|"News"| USER
 
-    %% ══════════════════════════════════════════════════════
-    %% FLOW C — AI Chat Q&A
-    %% ══════════════════════════════════════════════════════
+    %% Flow F — Email
+    EP6 --> EMAIL_BUILD
+    TABLES & PERSONA -->|"Data"| EMAIL_BUILD
+    SMTP -->|"Digest"| SUB
 
-    EP3 -->|"Extract broker, amount, instrument"| FEE_CALC
-    FEE_DB -->|"Fee context & rules"| AI_CHAT
-    FEE_CALC -->|"Pre-computed fee amounts"| AI_CHAT
-    AI_CHAT -->|"Natural language answer"| EP3
-    EP3 -->|"Returns answer"| USER
+    %% Flow G — QA (background)
+    EP2 & EP3 & EP5 -.->|"Review"| JUDGE
 
-    %% ══════════════════════════════════════════════════════
-    %% FLOW D — Financial Analysis
-    %% ══════════════════════════════════════════════════════
-
-    EP5 -->|"Request analysis"| TABLES
-    TABLES -->|"Fee data"| AI_ANALYSIS
-    AI_ANALYSIS -->|"Narrative report"| EP5
-    EP5 -->|"Returns analysis"| USER
-
-    %% ══════════════════════════════════════════════════════
-    %% FLOW E — News Feed
-    %% ══════════════════════════════════════════════════════
-
-    EP4 -->|"Fetch news"| NEWS_CACHE
-    NEWS_CACHE -->|"Recent news items"| EP4
-    EP4 -->|"Returns news articles"| USER
-
-    %% ══════════════════════════════════════════════════════
-    %% FLOW F — Email Reports
-    %% ══════════════════════════════════════════════════════
-
-    EP6 -->|"Manual trigger"| EMAIL_BUILD
-    TABLES -->|"Fee tables"| EMAIL_BUILD
-    PERSONA -->|"TCO rankings"| EMAIL_BUILD
-    SMTP -->|"Weekly digest"| SUB
-
-    %% ══════════════════════════════════════════════════════
-    %% FLOW G — Quality Assurance (background, non-blocking)
-    %% ══════════════════════════════════════════════════════
-
-    EP2 -.->|"Background: submit for review"| JUDGE
-    EP3 -.->|"Background: submit for review"| JUDGE
-    EP5 -.->|"Background: submit for review"| JUDGE
-
-    %% ══════════════════════════════════════════════════════
     %% STYLING
-    %% ══════════════════════════════════════════════════════
+    classDef actor     fill:#1A73E8,stroke:#0D47A1,color:#FFF,rx:12
+    classDef gateway   fill:#E8EAF6,stroke:#3949AB,color:#1A237E
+    classDef endpoint  fill:#E3F2FD,stroke:#1565C0,color:#0D1B5E
+    classDef datastore fill:#F3E5F5,stroke:#6A1B9A,color:#4A148C
+    classDef llm       fill:#FFF3E0,stroke:#E65100,color:#BF360C
+    classDef engine    fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20
+    classDef scheduler fill:#FCE4EC,stroke:#AD1457,color:#880E4F
+    classDef quality   fill:#F9FBE7,stroke:#827717,color:#33691E
 
-    classDef actor       fill:#1A73E8,stroke:#0D47A1,color:#FFFFFF,rx:12,font-size:13px
-    classDef gateway     fill:#E8EAF6,stroke:#3949AB,color:#1A237E,font-size:12px
-    classDef endpoint    fill:#E3F2FD,stroke:#1565C0,color:#0D1B5E,font-size:11px
-    classDef datastore   fill:#F3E5F5,stroke:#6A1B9A,color:#4A148C,font-size:12px
-    classDef llm         fill:#FFF3E0,stroke:#E65100,color:#BF360C,font-size:12px
-    classDef engine      fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20,font-size:12px
-    classDef scheduler   fill:#FCE4EC,stroke:#AD1457,color:#880E4F,font-size:12px
-    classDef quality     fill:#F9FBE7,stroke:#827717,color:#33691E,font-size:12px
-
-    class USER,ADMIN,SUB actor
+    class USER,ADMIN,SUB,BROKERS actor
     class RL,CORS gateway
     class EP1,EP2,EP3,EP4,EP5,EP6 endpoint
     class FEE_DB,NEWS_STORE datastore
@@ -236,7 +132,6 @@ flowchart TD
     class SCRAPER,NEWS_SCRAPER,FEE_CALC,PERSONA,TABLES,NOTES engine
     class NEWS_SCHED,EMAIL_SCHED,EMAIL_BUILD,SMTP,NEWS_CACHE scheduler
     class JUDGE,LANGFUSE quality
-    class BROKERS actor
 ```
 
 ---
