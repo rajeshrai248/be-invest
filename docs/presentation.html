@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BE-Invest — Project Presentation</title>
+  <style>
+    /* ── Reset & base ───────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #f0f4f8;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      color: #1a2340;
+    }
+
+    /* ── Page card (A4-ish ratio, max 960 px wide) ──────────────── */
+    .page {
+      width: 100%;
+      max-width: 960px;
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.12);
+      overflow: hidden;
+    }
+
+    /* ── Header banner ──────────────────────────────────────────── */
+    .header {
+      background: linear-gradient(135deg, #ff6200 0%, #d44e00 55%, #1a2340 100%);
+      padding: 40px 48px 32px;
+      color: #ffffff;
+      position: relative;
+    }
+    .header .logo-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    .header .logo-badge {
+      background: rgba(255,255,255,0.18);
+      border: 2px solid rgba(255,255,255,0.4);
+      border-radius: 10px;
+      padding: 6px 14px;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 1px;
+    }
+    .header .ing-badge {
+      background: #ff6200;
+      border: 2px solid rgba(255,255,255,0.6);
+      border-radius: 10px;
+      padding: 6px 14px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: #fff;
+    }
+    .accepted-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.4);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      margin-left: auto;
+    }
+    .accepted-tag::before { content: "✅"; font-size: 14px; }
+
+    .header h1 {
+      font-size: 30px;
+      font-weight: 800;
+      line-height: 1.2;
+      margin-bottom: 8px;
+    }
+    .header p.subtitle {
+      font-size: 15px;
+      opacity: 0.88;
+      max-width: 620px;
+      line-height: 1.55;
+    }
+
+    /* ── Body grid ──────────────────────────────────────────────── */
+    .body {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+    }
+
+    /* ── Sections ───────────────────────────────────────────────── */
+    section {
+      padding: 32px 36px;
+      border-right: 1px solid #e8ecf2;
+      border-bottom: 1px solid #e8ecf2;
+    }
+    section:nth-child(even) { border-right: none; }
+    section:nth-last-child(-n+2) { border-bottom: none; }
+
+    section h2 {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #ff6200;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    section h2 .icon {
+      font-size: 18px;
+    }
+
+    section p, section li {
+      font-size: 14px;
+      line-height: 1.65;
+      color: #374151;
+    }
+    section ul {
+      list-style: none;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    section ul li {
+      padding-left: 22px;
+      position: relative;
+    }
+    section ul li::before {
+      content: "▸";
+      position: absolute;
+      left: 0;
+      color: #ff6200;
+      font-size: 12px;
+      top: 2px;
+    }
+
+    /* ── Value-add pill grid ────────────────────────────────────── */
+    .pill-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .pill {
+      background: #fff7f2;
+      border: 1px solid #ffdbc8;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #7c3200;
+      font-weight: 600;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      line-height: 1.4;
+    }
+    .pill .emoji { font-size: 18px; flex-shrink: 0; }
+
+    /* ── ING status section (full width) ───────────────────────── */
+    .full-width {
+      grid-column: 1 / -1;
+      background: linear-gradient(135deg, #fff7f2 0%, #fef3e8 100%);
+      border-right: none !important;
+    }
+    .status-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .status-card {
+      background: #ffffff;
+      border: 1px solid #ffdbc8;
+      border-radius: 12px;
+      padding: 16px 18px;
+    }
+    .status-card .step-num {
+      font-size: 24px;
+      font-weight: 900;
+      color: #ff6200;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+    .status-card .step-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1a2340;
+      margin-bottom: 4px;
+    }
+    .status-card .step-desc {
+      font-size: 12.5px;
+      color: #4b5563;
+      line-height: 1.55;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 20px;
+      padding: 2px 10px;
+      margin-top: 8px;
+    }
+    .badge-done   { background: #dcfce7; color: #166534; }
+    .badge-active { background: #fef9c3; color: #854d0e; }
+    .badge-next   { background: #ede9fe; color: #5b21b6; }
+
+    /* ── Footer strip ───────────────────────────────────────────── */
+    .footer {
+      background: #1a2340;
+      color: rgba(255,255,255,0.7);
+      font-size: 11.5px;
+      padding: 14px 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .footer strong { color: #ffffff; }
+
+    /* ── Print / A4 optimisation ────────────────────────────────── */
+    @media print {
+      body { background: white; padding: 0; }
+      .page { box-shadow: none; border-radius: 0; max-width: 100%; }
+    }
+
+    @media (max-width: 680px) {
+      .body { grid-template-columns: 1fr; }
+      section { border-right: none; }
+      .status-row { grid-template-columns: 1fr; }
+      .pill-grid  { grid-template-columns: 1fr; }
+      .header { padding: 28px 24px 22px; }
+      section { padding: 24px 20px; }
+      .footer { padding: 14px 20px; flex-direction: column; gap: 6px; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ══ HEADER ══════════════════════════════════════════════════ -->
+  <header class="header">
+    <div class="logo-row">
+      <span class="logo-badge">🇧🇪 BE-Invest</span>
+      <span class="ing-badge">🏦 ING Partnership</span>
+      <span class="accepted-tag">Accepted by ING</span>
+    </div>
+    <h1>AI-Powered Belgian Broker Fee<br>Intelligence Platform</h1>
+    <p class="subtitle">
+      Helping investors and financial institutions make smarter decisions by cutting through the complexity of Belgian broker fee structures — in real time, with AI precision.
+    </p>
+  </header>
+
+  <!-- ══ BODY GRID ════════════════════════════════════════════════ -->
+  <div class="body">
+
+    <!-- Section 1 — Problem Statement -->
+    <section>
+      <h2><span class="icon">🎯</span> The Problem We Solve</h2>
+      <p style="margin-bottom:12px;">
+        Belgian retail investors and financial advisors face a fragmented, opaque landscape of broker fees. Key pain points include:
+      </p>
+      <ul>
+        <li>Fee structures are buried in dense PDFs, multiple web pages, and legalese — impossible to compare at a glance</li>
+        <li>Hidden costs (FX markups, custody fees, connectivity charges) are systematically underestimated</li>
+        <li>No single source of truth exists across Bolero, Keytrade, Degiro, ING Self Invest, Rebel, Revolut, and Trade Republic</li>
+        <li>Sales and advisory teams waste hours manually researching and updating fee tables</li>
+        <li>Investors make suboptimal decisions due to lack of personalised, scenario-based cost analysis</li>
+      </ul>
+    </section>
+
+    <!-- Section 2 — Our Solution -->
+    <section>
+      <h2><span class="icon">🤖</span> Our Solution</h2>
+      <p style="margin-bottom:12px;">
+        BE-Invest is an end-to-end AI platform that automatically extracts, validates, and serves up-to-date broker fee intelligence:
+      </p>
+      <ul>
+        <li><strong>AI Extraction Pipeline</strong> — GPT-4o scrapes and parses broker PDFs &amp; web pages automatically</li>
+        <li><strong>Deterministic Fee Engine</strong> — Pure-Python rule engine ensures 100 % accurate cost calculations</li>
+        <li><strong>Natural Language Chat</strong> — Users ask "Which broker is cheapest for ETF trading at €5,000?" and get instant answers</li>
+        <li><strong>Investor Persona Profiles</strong> — Tailored TCO analysis for passive, moderate, and active investor archetypes</li>
+        <li><strong>Multi-language Support</strong> — English, French, and Dutch output for Belgian market needs</li>
+      </ul>
+    </section>
+
+    <!-- Section 3 — Value Add -->
+    <section>
+      <h2><span class="icon">💡</span> Value We Deliver</h2>
+      <div class="pill-grid">
+        <div class="pill"><span class="emoji">⏱️</span>Hours of manual research reduced to seconds per query</div>
+        <div class="pill"><span class="emoji">🎯</span>Accurate, scenario-based cost comparison for any trade size</div>
+        <div class="pill"><span class="emoji">📊</span>Weekly automated reports delivered directly to subscribers</div>
+        <div class="pill"><span class="emoji">🔒</span>Quality-assured by an independent LLM judge (Gemini) on every output</div>
+        <div class="pill"><span class="emoji">🌐</span>Always up-to-date via 24-hour automated data refresh cycle</div>
+        <div class="pill"><span class="emoji">🤝</span>Empowers sales teams to advise clients with confidence &amp; speed</div>
+      </div>
+    </section>
+
+    <!-- Section 4 — Technology Stack -->
+    <section>
+      <h2><span class="icon">⚙️</span> How It Works</h2>
+      <ul>
+        <li><strong>Data Ingestion:</strong> Playwright &amp; Requests scrape 7 major Belgian broker sites daily</li>
+        <li><strong>AI Extraction:</strong> GPT-4o (temp 0.0) extracts structured fee records from raw text</li>
+        <li><strong>AI Structuring:</strong> Claude Sonnet validates &amp; normalises into a canonical schema</li>
+        <li><strong>Fee Engine:</strong> Computes flat, tiered, percentage, and composite fees with full auditability</li>
+        <li><strong>Chat Interface:</strong> Groq / Llama 3.3 70B delivers sub-second natural language answers</li>
+        <li><strong>Observability:</strong> Langfuse traces every LLM call for cost monitoring &amp; quality scoring</li>
+      </ul>
+    </section>
+
+    <!-- Section 5 — ING Status (full width) -->
+    <section class="full-width">
+      <h2><span class="icon">🏦</span> ING Partnership &amp; Roadmap</h2>
+      <div class="status-row">
+
+        <div class="status-card">
+          <div class="step-num">01</div>
+          <div class="step-title">Concept Accepted by ING</div>
+          <div class="step-desc">
+            The BE-Invest platform has been formally accepted by ING as a high-value tool for their sales and marketing teams. The solution has demonstrated measurable time savings and accuracy gains in initial evaluations.
+          </div>
+          <span class="badge badge-done">✅ Completed</span>
+        </div>
+
+        <div class="status-card">
+          <div class="step-num">02</div>
+          <div class="step-title">Feature Expansion in Progress</div>
+          <div class="step-desc">
+            We are actively adding new capabilities: expanded broker coverage (Trade Republic), richer investor scenario modelling, CRM-ready export formats, and a white-label dashboard tailored to ING's design system.
+          </div>
+          <span class="badge badge-active">🚧 In Progress</span>
+        </div>
+
+        <div class="status-card">
+          <div class="step-num">03</div>
+          <div class="step-title">ING Compliance &amp; In-House Deployment</div>
+          <div class="step-desc">
+            Working closely with ING's compliance and security teams to meet all regulatory and data-residency requirements, enabling a full in-house deployment for the ING Belgium sales and marketing organisation.
+          </div>
+          <span class="badge badge-next">🔜 Next Milestone</span>
+        </div>
+
+      </div>
+    </section>
+
+  </div><!-- /.body -->
+
+  <!-- ══ FOOTER ══════════════════════════════════════════════════ -->
+  <footer class="footer">
+    <span><strong>BE-Invest</strong> — Belgian Broker Fee Intelligence Platform</span>
+    <span>Partnership: <strong>ING Belgium</strong> · April 2026</span>
+    <span>For internal use only — subject to ING compliance review</span>
+  </footer>
+
+</div><!-- /.page -->
+</body>
+</html>
