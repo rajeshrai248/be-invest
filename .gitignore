@@ -46,3 +46,4 @@ scripts/test_pptx.py
 BE-Invest_Management_Deck.pptx
 BE-Invest_Presentation.pptx
 create_presentation.py
+create_management_deck.py
