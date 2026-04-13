@@ -568,11 +568,34 @@ _VALID_PATH_PREFIXES = frozenset({
 
 
 def _get_client_ip(request: Request) -> str:
-    """Respect X-Forwarded-For for reverse proxy setups."""
+    """Extract real client IP from reverse proxy headers.
+
+    Priority: CF-Connecting-IP (Cloudflare) > X-Real-IP (nginx) > X-Forwarded-For > direct connection.
+    """
+    # DEBUG: log all proxy-related headers to diagnose IP resolution
+    _proxy_headers = {
+        k: v for k, v in request.headers.items()
+        if k in ("cf-connecting-ip", "x-real-ip", "x-forwarded-for", "x-forwarded-proto", "true-client-ip")
+    }
+    direct_ip = request.client.host if request.client else "unknown"
+    if _proxy_headers:
+        logger.info(f"[IP-DEBUG] direct={direct_ip} proxy_headers={_proxy_headers}")
+    else:
+        logger.info(f"[IP-DEBUG] direct={direct_ip} NO proxy headers found")
+
+    # Cloudflare Tunnel sets this to the true client IP
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
+    # nginx commonly sets X-Real-IP
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    # Generic proxy header
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return direct_ip
 
 
 def _is_private_ip(ip_str: str) -> bool:
@@ -1330,6 +1353,82 @@ def _get_cost_comparison_data() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to load analysis file: {exc}")
 
 
+def _compute_financial_analysis_numerics(broker_names: List[str]) -> Dict[str, Any]:
+    """Pre-compute all numeric sections for /financial-analysis deterministically.
+
+    Returns cheapestPerTier, costComparison, and costEvidence — computed from
+    the fee calculator and persona calculator, never from the LLM.
+    """
+    from ..validation.output_validator import compute_cheapest_per_tier
+    from ..validation.persona_calculator import (
+        compute_persona_costs, PERSONAS, PersonaCostResult,
+    )
+
+    _ensure_rules_loaded()
+
+    # --- cheapestPerTier ---
+    cheapest = compute_cheapest_per_tier(broker_names)
+
+    # --- costComparison + costEvidence ---
+    # Map prompt persona keys to persona_calculator keys
+    persona_map = {
+        "passiveInvestor": "passive_investor",
+        "activeTrader": "active_trader",
+    }
+
+    cost_comparison: Dict[str, list] = {}
+    cost_evidence: Dict[str, Dict[str, str]] = {}
+
+    for prompt_key, calc_key in persona_map.items():
+        results: List[PersonaCostResult] = []
+        for broker in broker_names:
+            r = compute_persona_costs(broker, calc_key)
+            if r is not None:
+                results.append(r)
+
+        # Sort by TCO ascending and assign ranks
+        results.sort(key=lambda r: r.total_annual_tco)
+        for i, r in enumerate(results):
+            r.rank = i + 1
+
+        cost_comparison[prompt_key] = [
+            {"broker": r.broker, "annualCost": r.total_annual_tco, "rank": r.rank}
+            for r in results
+        ]
+
+        # Build evidence strings showing the breakdown
+        evidence: Dict[str, str] = {}
+        for r in results:
+            parts = []
+            for d in r.trading_cost_details:
+                parts.append(
+                    f"{d.count_per_year}x €{d.fee_per_trade:.2f} ({d.instrument} €{d.amount:.0f})"
+                )
+            trading_str = " + ".join(parts) if parts else "€0"
+            extras = []
+            if r.custody_cost_annual > 0:
+                extras.append(f"€{r.custody_cost_annual:.2f} custody")
+            if r.connectivity_cost_annual > 0:
+                extras.append(f"€{r.connectivity_cost_annual:.2f} connectivity")
+            if r.subscription_cost_annual > 0:
+                extras.append(f"€{r.subscription_cost_annual:.2f} subscription")
+            if r.fx_cost_annual > 0:
+                extras.append(f"€{r.fx_cost_annual:.2f} FX")
+            if r.dividend_cost_annual > 0:
+                extras.append(f"€{r.dividend_cost_annual:.2f} dividend")
+            if extras:
+                evidence[r.broker] = f"{trading_str} + {' + '.join(extras)} = €{r.total_annual_tco:.2f}/yr"
+            else:
+                evidence[r.broker] = f"{trading_str} = €{r.total_annual_tco:.2f}/yr"
+        cost_evidence[prompt_key] = evidence
+
+    return {
+        "cheapestPerTier": cheapest,
+        "costComparison": cost_comparison,
+        "costEvidence": cost_evidence,
+    }
+
+
 def _submit_groundedness_evaluation(
     endpoint: str,
     user_input: str,
@@ -1826,26 +1925,19 @@ def generate_financial_analysis(
             detail="No valid broker data found. Run generate_exhaustive_summary.py first."
         )
 
+    # Pre-compute all numeric sections deterministically
+    logger.info("🔧 Pre-computing numeric sections (cheapestPerTier, costComparison, costEvidence)...")
+    precomputed = _compute_financial_analysis_numerics(broker_names)
+    logger.info("✅ Pre-computed numeric sections ready")
+
     # Prepare comprehensive prompt for financial analysis
-    system_prompt = f"""
-    Act as a Senior Financial Analyst and Investment Journalist specializing in the Euronext Brussels market. I need a structured, evidence-based investment memo on [INSERT TICKER/COMPANY NAME HERE] designed for a modern financial application (mobile-first, scannable).
+    system_prompt = f"""You are a Senior Financial Analyst specializing in Belgian investment brokers.
+Your task is to generate QUALITATIVE analysis only. All numeric data (fees, costs, rankings) has been
+pre-computed by a deterministic calculator and will be injected into the output automatically.
 
-Your analysis must include:
+IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles, summaries, pros, cons, bestFor) in {language_name}. Keep broker names, currency symbols (EUR/€), JSON keys, and numerical values unchanged.
 
-The 'Lede': A 2-sentence executive summary of the current investment thesis.
-
-Quantitative Evidence: Use LaTeX for financial formulas. Focus on Free Cash Flow (FCF), EBITDA margins, Net Debt/EBITDA, and P/E ratios relative to historical averages and peers.
-
-The Belgian Context: Analyze specific local factors (e.g., Belgian withholding tax, index weighting in the BEL20, exposure to the Belgian economy/bonds).
-
-Bull vs. Bear: Three distinct, data-backed points for both the upside and downside.
-
-Valuation & Verdict: A clear rating (Buy/Hold/Sell) based on a specific valuation method (DCF or Peer Multiples).
-
-Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize hard data.
-
-IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles, summaries, pros, cons, bestFor, cost evidence descriptions) in {language_name}. Keep broker names, currency symbols (EUR/€), JSON keys, and numerical values unchanged.
-    """
+Tone: Professional, skeptical, and objective. Avoid generic fluff; prioritize hard data."""
 
     # Create explicit list of all brokers
     broker_list = ", ".join(broker_names)
@@ -1854,23 +1946,22 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
     from datetime import datetime
     current_date = datetime.now().strftime('%B %d, %Y')
 
-    user_prompt = f"""Generate a comprehensive financial analysis comparing ALL Belgian investment brokers.
+    user_prompt = f"""Generate a qualitative financial analysis comparing ALL Belgian investment brokers.
 
     CRITICAL: You MUST include ALL {len(broker_names)} brokers in your analysis:
     {broker_list}
 
-    BROKER DATA:
+    BROKER DATA (fee rules and hidden costs — for context only, do NOT recalculate fees):
     {json.dumps(cost_data, indent=2)}
 
-    ### CALCULATION RULES (STRICT):
-    1. **Total Cost of Ownership (TCO)**: You MUST add ALL hidden fees to the transaction cost:
-       - **Handling Fees**: e.g., Degiro's €1.00 per trade.
-       - **Connectivity Fees**: e.g., Degiro's €2.50/year (amortize or add to annual totals).
-       - **Custody Fees**: e.g., ING's % fee per month.
-       - **Service Fees**: Any fixed monthly platform fees (e.g., Keytrade Pro if applicable, though usually free).
-    2. **Profiles for Annual Cost**:
-       - **Passive Investor (monthly500ETF)**: Buys €500 of ETFs once per month (12 trades/year). *Assumption: Core Selection if available, otherwise standard.*
-       - **Active Trader**: Buys €2,500 of Stocks 10 times/month + €10,000 of Stocks 2 times/month (144 trades/year).
+    PRE-COMPUTED NUMERIC DATA (these exact values will be used in the final output):
+    {json.dumps(precomputed, indent=2)}
+
+    ### YOUR TASK
+    You ONLY need to generate the qualitative/text fields. The numeric fields (cheapestPerTier,
+    costComparison, costEvidence) are already computed and will be injected automatically.
+    DO NOT attempt to calculate fees or costs — use the pre-computed data above as reference
+    for your qualitative assessments (ratings, pros, cons, summaries).
 
     ### OUTPUT STRUCTURE
     Return a SIMPLE JSON object. Keep all text strings short (max 150 chars).
@@ -1897,46 +1988,16 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
           "cons": ["Con 1", "Con 2"],
           "bestFor": ["Buy & Hold", "Day Trading"]
         }}
-        // ... Repeat for ALL brokers
-      ],
-      "cheapestPerTier": {{
-        "stocks": {{
-          "250": "Broker Name (€Cost)",
-          "2500": "Broker Name (€Cost)",
-          "10000": "Broker Name (€Cost)",
-          "50000": "Broker Name (€Cost)"
-        }},
-        "etfs": {{
-          "500": "Broker Name (€Cost)",
-          "5000": "Broker Name (€Cost)"
-        }}
-      }},
-      "costComparison": {{
-        "passiveInvestor": [
-          {{"broker": "Name", "annualCost": 0, "rank": 1}},
-          // ... All brokers sorted by cost
-        ],
-        "activeTrader": [
-          {{"broker": "Name", "annualCost": 100, "rank": 1}},
-          // ... All brokers sorted by cost
-        ]
-      }},
-      "costEvidence": {{
-        "passiveInvestor": {{
-          "Broker Name": "12 x (€0 fee + €1 handling) + €0 custody = €12/yr",
-          "Another Broker": "12 x €5 fee = €60/yr"
-        }},
-        "activeTrader": {{
-          "Broker Name": "120x(€3) + 24x(€10) + €2.50 conn = €602.50/yr"
-        }}
-      }}
+        // ... Repeat for ALL {len(broker_names)} brokers
+      ]
     }}
 
     CRITICAL OUTPUT RULES:
     1. **Valid JSON Only**: No markdown formatting.
-    2. **All Brokers**: Every list must contain exactly {len(broker_names)} entries.
-    3. **Math Check**: Verify your "Active Trader" sums. (e.g. if fee is €3/trade, annual is ~€432, not €50).
-    4. **Language**: All human-readable text values MUST be in {language_name}. JSON keys must remain in English.
+    2. **All Brokers**: brokerComparisons must contain exactly {len(broker_names)} entries.
+    3. **No fee calculations**: Do NOT include cheapestPerTier, costComparison, or costEvidence — these are injected automatically.
+    4. **Use pre-computed data**: Base your ratings and pros/cons on the pre-computed rankings and costs shown above.
+    5. **Language**: All human-readable text values MUST be in {language_name}. JSON keys must remain in English.
     """
 
     try:
@@ -1952,13 +2013,7 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
         try:
             result = json.loads(response_text)
             langfuse_context.score_current_trace(name="json_valid", value=1)
-            
-            # Replace LLM-generated cheapestPerTier with deterministic calculation
-            logger.info("🔧 Replacing LLM-generated cheapestPerTier with deterministic calculation...")
-            from ..validation import compute_cheapest_per_tier
-            result["cheapestPerTier"] = compute_cheapest_per_tier(broker_names)
-            logger.info("✅ Deterministic cheapestPerTier computed successfully")
-            
+
         except json.JSONDecodeError as e:
             langfuse_context.score_current_trace(name="json_valid", value=0)
             logger.error(f"❌ JSON parsing failed: {e}")
@@ -1972,17 +2027,19 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
                     response_text = _call_llm("gpt-4o", system_prompt, user_prompt, response_format="json")
                     result = json.loads(response_text)
                     logger.info("✅ Successfully generated with GPT-4o fallback")
-                    
-                    # Replace LLM-generated cheapestPerTier with deterministic calculation
-                    from ..validation import compute_cheapest_per_tier
-                    result["cheapestPerTier"] = compute_cheapest_per_tier(broker_names)
-                    logger.info("✅ Deterministic cheapestPerTier computed successfully (fallback path)")
-                    
+
                 except Exception as fallback_error:
                     logger.error(f"❌ Fallback to GPT-4o also failed: {fallback_error}")
                     raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
             else:
                 raise HTTPException(status_code=500, detail=f"Failed to parse LLM response as JSON: {e}")
+
+        # Inject deterministic numeric sections (overrides any LLM-generated values)
+        logger.info("🔧 Injecting pre-computed numeric sections into LLM output...")
+        result["cheapestPerTier"] = precomputed["cheapestPerTier"]
+        result["costComparison"] = precomputed["costComparison"]
+        result["costEvidence"] = precomputed["costEvidence"]
+        logger.info("✅ Deterministic cheapestPerTier, costComparison, costEvidence injected")
 
         # Validation - The response should be grouped by exchanges
         logger.info(f"🔍 Validating response structure...")
@@ -2111,7 +2168,7 @@ IMPORTANT LANGUAGE INSTRUCTION: Generate ALL human-readable text content (titles
             _submit_groundedness_evaluation(
                 endpoint="financial-analysis",
                 user_input=f"Generate financial analysis for {len(found_exchanges)} exchanges with {total_broker_entries} broker entries (lang={lang})",
-                retrieved_context=json.dumps(cost_data, indent=2)[:50000],
+                retrieved_context=json.dumps({**cost_data, "_precomputed": precomputed}, indent=2)[:50000],
                 generated_output=json.dumps(result, indent=2)[:50000],
             )
         except Exception as e:

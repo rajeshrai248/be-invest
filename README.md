@@ -521,6 +521,43 @@ uvicorn be_invest.api.server:app --reload --port 8000
 python scripts/analyze_broker_fees.py
 ```
 
+### Weekly Email Scheduling (Windows host)
+
+The weekly broker fee email is delivered by **Windows Task Scheduler** running a standalone Python script — **not** by an in-process timer inside uvicorn. This change was made after an in-process `threading.Timer` drifted by ~9 hours when the laptop slept mid-week (Python timers don't advance while the host is suspended).
+
+**Components:**
+- `scripts/send_weekly_email.py` — standalone sender. Imports `build_and_send_report` directly and sends via SMTP. Exit code 0/1 so Task Scheduler's missed-run catch-up works. Logs to `logs/weekly_email.log`.
+- `scripts/register_weekly_email_task.ps1` — idempotent registration script.
+- `.env` flag `EMAIL_SCHEDULER_ENABLED=false` — disables the legacy in-process timer in `src/be_invest/api/server.py` so the two schedulers don't both fire.
+
+**Install / re-install the task:**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\register_weekly_email_task.ps1
+```
+
+Task name: `BeInvest-WeeklyEmail`. Trigger: Mondays 09:00 local. Key flags: `StartWhenAvailable` (fires on next wake if the slot was missed), `WakeToRun`, `AllowStartIfOnBatteries`. Runs as the interactive user — no stored password needed.
+
+**Dry run (no SMTP):**
+```bash
+python -c "import sys; sys.path.insert(0, 'src'); \
+  from dotenv import load_dotenv; load_dotenv('.env'); \
+  from be_invest import email_sender; \
+  email_sender.send_email = lambda s, h, r: print(f'[DRY] {s} | {len(r)} recipients | {len(h)} bytes'); \
+  print(email_sender.build_and_send_report())"
+```
+
+**Force a real send right now:**
+```powershell
+Start-ScheduledTask -TaskName 'BeInvest-WeeklyEmail'
+```
+
+**Uninstall:**
+```powershell
+Unregister-ScheduledTask -TaskName 'BeInvest-WeeklyEmail' -Confirm:$false
+```
+
+On a Linux host, the equivalent is a systemd timer with `Persistent=true` (or an `anacron` entry) targeting the same script.
+
 ### Vercel Deployment
 
 ```bash

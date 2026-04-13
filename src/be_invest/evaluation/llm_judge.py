@@ -337,14 +337,21 @@ def evaluate_groundedness_sync(
             return None
         except Exception as e:
             error_str = str(e)
-            if "429" in error_str or "Resource exhausted" in error_str:
+            retryable = (
+                "429" in error_str
+                or "Resource exhausted" in error_str
+                or "503" in error_str
+                or "UNAVAILABLE" in error_str
+                or "overloaded" in error_str.lower()
+            )
+            if retryable:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
-                    logger.warning(f"⚠️ Gemini rate limit (attempt {attempt + 1}/{max_retries}). Retrying in {delay}s...")
+                    logger.warning(f"⚠️ Gemini transient error (attempt {attempt + 1}/{max_retries}). Retrying in {delay}s...")
                     time.sleep(delay)
                     continue
                 else:
-                    logger.warning(f"⚠️ Gemini rate limit exhausted after {max_retries} attempts for {endpoint}")
+                    logger.warning(f"⚠️ Gemini retries exhausted after {max_retries} attempts for {endpoint}: {e}")
                     return None
             else:
                 logger.warning(f"⚠️ Judge evaluation failed for {endpoint}: {e}")

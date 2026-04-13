@@ -41,7 +41,7 @@ if __name__ == "__main__":
     # host="0.0.0.0" allows connections from any network interface
     uvicorn.run(
         "be_invest.api.server:app",
-        host="0.0.0.0",  # Changed from 127.0.0.1 to allow network access
+        host="127.0.0.1",  # Localhost only — nginx on port 80 handles external traffic and forwards real IPs
         port=8000,
         reload=True,
         reload_dirs=[str(SRC_PATH)],

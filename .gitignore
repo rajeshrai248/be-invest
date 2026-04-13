@@ -43,3 +43,6 @@ scripts/build_presentation.py
 scripts/test_pptx.py
 >>>>>>> e05dd0607f2a55507c0ad1ab70edc8b73ed19648
 .env.example
+BE-Invest_Management_Deck.pptx
+BE-Invest_Presentation.pptx
+create_presentation.py
