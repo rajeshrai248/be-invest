@@ -1,7 +1,7 @@
 """Pydantic request and response models for the public API."""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, HttpUrl
 
@@ -41,7 +41,7 @@ class NewsDeleteRequest(BaseModel):
 class ChatMessage(BaseModel):
     """A single message in conversation history."""
 
-    role: str
+    role: Literal["user", "assistant"]
     content: str
 
 

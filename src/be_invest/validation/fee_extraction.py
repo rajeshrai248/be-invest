@@ -80,7 +80,8 @@ Return a JSON object with EXACTLY this structure:
 PATTERN TYPES (use exactly these strings):
 - "flat": Simple flat fee for all amounts (e.g., Degiro EUR2 + EUR1 handling)
 - "tiered_flat": Multiple flat fee tiers by amount (only up_to tiers, no slice)
-- "tiered_flat_then_slice": Flat tiers for small amounts, per-slice for larger amounts (Bolero, Keytrade, Rebel)
+- "tiered_flat_then_slice": Flat tiers for small amounts, then pure per-slice pricing for larger amounts with NO base fee added (Rebel)
+- "tiered_flat_then_base_plus_slice": Flat tiers for small amounts, then a base fee up to base_up_to plus per-slice pricing on the remainder (Keytrade)
 - "percentage_with_min": Percentage rate with minimum fee (ING, Revolut)
 - "base_plus_slice": Single base fee threshold + per-slice for remainder
 
@@ -89,6 +90,7 @@ TIER TYPES:
 - {{"up_to": 2500, "fee": 7.50}} - flat fee for amounts up to threshold
 - {{"per_slice": 10000, "fee": 15.00}} - per-started-slice (no up_to means it applies after all flat tiers)
 - {{"per_slice": 10000, "fee": 15.00, "max_fee": 50.00}} - per-slice with fee cap
+- {{"base_up_to": 10000, "base_fee": 14.95, "per_slice": 10000, "slice_fee": 7.50}} - base fee covers amounts up to base_up_to, then each started per_slice above that adds slice_fee
 - {{"rate": 0.0035, "min_fee": 1.00}} - percentage rate with minimum
 
 EXCHANGE FIELD:
@@ -132,6 +134,7 @@ CRITICAL — TWO DIFFERENT NUMERIC CONVENTIONS ARE USED IN THE SAME JSON:
    - WRONG: fx_fee_pct=0.0025 for a 0.25% fee. RIGHT: fx_fee_pct=0.25 for a 0.25% fee.
 
 IMPORTANT:
+- Use only the pattern types listed above. Do not invent pattern names.
 - Extract ALL tiers from the data. Many brokers have 4-5 tiers, not just 2.
 - Include "max_fee" on the per_slice tier if the broker caps total commission.
 - Include rules for stocks, etfs, AND bonds where the data is available.
@@ -152,6 +155,7 @@ IMPORTANT:
 COMMON LLM EXTRACTION ERRORS TO AVOID:
 - Keytrade Bank: stocks and ETFs/trackers have the SAME fee tiers on Euronext Brussels.
   Both use: EUR2.45 (0-250), EUR5.95 (250-2500), EUR14.95 (2500-10000), +EUR7.50 per additional EUR10000.
+  Use pattern="tiered_flat_then_base_plus_slice" with a base_up_to/base_fee tier for the EUR14.95 up-to-EUR10000 band.
   The PDF confirms: "Trackers - Transactions at the same fee as for stock market transactions".
 - Rebel: The standard stock fee on Euronext Brussels is EUR3 (up to EUR2500), then EUR10 per
   started EUR10000 slice. Do NOT confuse this with the youth (age 18-24) discount of EUR1 flat.

@@ -102,14 +102,7 @@ from ..cache import SimpleCache
 
 # Import enhanced prompt functions
 try:
-    import sys
-    from pathlib import Path
-
-    # Add project root to path for imports
-    project_root = Path(__file__).parent.parent.parent.parent
-    sys.path.insert(0, str(project_root))
-
-    from tests.enhanced_llm_prompts import (
+    from ..prompts.enhanced_llm_prompts import (
         create_enhanced_prompt,
         create_focused_text_for_extraction,
         validate_enhanced_extraction_result,

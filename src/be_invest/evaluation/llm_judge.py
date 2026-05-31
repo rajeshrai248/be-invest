@@ -233,9 +233,10 @@ The comparison tables are DETERMINISTICALLY computed from the fee rules. The def
 Fee pattern calculation rules you MUST follow when verifying:
 - **flat**: fee = flat amount + handling_fee (constant regardless of transaction size)
 - **tiered_flat**: find the tier where amount <= up_to, fee = that tier's fee + handling_fee
-- **tiered_flat_then_slice**: find the highest flat tier where amount <= up_to. If amount exceeds all flat tiers, use ONLY per-slice calculation (NO base fee): ceiling(remainder / per_slice) * slice_fee, where remainder = amount - highest_tier_threshold. Apply max_fee cap if specified. Add handling_fee.
+- **tiered_flat_then_slice**: if amount fits an up_to tier, fee = that tier's fee + handling_fee. If amount exceeds all up_to tiers, use ONLY per-slice calculation (NO base fee): ceiling((amount - highest_up_to_threshold) / per_slice) * slice_fee. Apply max_fee cap if specified. Add handling_fee.
+- **tiered_flat_then_base_plus_slice**: if amount fits an up_to tier, fee = that tier's fee + handling_fee. Otherwise, use the base_up_to tier: if amount <= base_up_to, fee = base_fee + handling_fee; if amount > base_up_to, fee = base_fee + ceiling((amount - base_up_to) / per_slice) * slice_fee + handling_fee.
 - **percentage_with_min**: fee = max(amount * rate, min_fee) + handling_fee
-- **base_plus_slice**: fee = base_fee + (amount / per_slice * slice_fee) + handling_fee
+- **base_plus_slice**: if amount <= base_up_to, fee = base_fee + handling_fee. If amount > base_up_to, fee = base_fee + ceiling((amount - base_up_to) / per_slice) * slice_fee + handling_fee
 
 IMPORTANT: Do NOT flag a fee as hallucinated unless you have recalculated it step-by-step and arrived at a DIFFERENT number. Show your calculation work in the reasoning.""",
 
