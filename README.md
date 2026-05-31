@@ -217,26 +217,65 @@ After running analysis, find reports in `data/output/`:
 | **ING Self Invest** | ✅ | ✅ | ✅ | ❌ | ✅ | Active |
 | **Rebel** (formerly Belfius) | ✅ | ✅ | ✅ | ❌ | ✅ | Active |
 | **Revolut** | ✅ | ✅ | ❌ | ❌ | ⚠️ | Limited |
+| **Trade Republic** | ✅ | ✅ | ✅ | ❌ | ✅ | Active |
 
 ## 🔧 Architecture
 
+The platform is organised in layers: a FastAPI service exposes the endpoints,
+deterministic Python computes every number, LLMs are used only for narrative /
+extraction, and Langfuse traces and auto-evaluates each call. See
+[docs/hld_current_architecture.drawio](docs/hld_current_architecture.drawio)
+for the current-state diagram and
+[docs/hld_future_architecture.drawio](docs/hld_future_architecture.drawio)
+for the planned human-feedback / continuous-improvement direction.
+
 ```
 be-invest/
-├── src/be_invest/           # Core library
-│   ├── models.py           # Data models (Broker, FeeRecord)
-│   ├── sources/            # Data extraction modules
-│   │   ├── llm_extract.py  # LLM-powered extraction
-│   │   ├── manual.py       # Manual data import
-│   │   └── pdf_extract.py  # PDF text extraction
-│   ├── cache.py            # Caching system
-│   └── api/                # FastAPI web service
-├── data/                   # Configuration and output
-│   ├── brokers.yaml        # Broker definitions
-│   └── output/             # Generated reports
-├── scripts/                # Analysis and utility scripts
-├── tests/                  # Test suite and validations
-└── api/                    # Vercel deployment entry
+├── src/be_invest/
+│   ├── api/
+│   │   └── server.py            # FastAPI app — all endpoints, Langfuse tracing
+│   ├── models.py                # Data models (Broker, FeeRecord, ...)
+│   ├── config_loader.py         # YAML config loading (brokers.yaml)
+│   ├── pipeline.py              # Broker fee data pipeline orchestration
+│   ├── fetchers.py             # Source fetchers (Playwright + filesystem cache)
+│   ├── cache.py                # Filesystem cache for fetched resources
+│   ├── news.py                 # News-flash storage & retrieval
+│   ├── email_sender.py         # Weekly broker-fee report email builder/sender
+│   ├── sources/                # Data acquisition
+│   │   ├── scrape.py           # Web/PDF scraping scaffolding
+│   │   ├── llm_extract.py      # LLM PDF → raw FeeRecord extraction
+│   │   ├── news_scrape.py      # Broker news scraping
+│   │   └── manual.py           # Manual data import
+│   ├── validation/             # Deterministic computation & validation
+│   │   ├── fee_calculator.py   # Exact per-trade fee computation (FEE_RULES)
+│   │   ├── persona_calculator.py # Per-persona total-cost-of-ownership
+│   │   ├── fee_extraction.py   # Shared extraction prompt/parse/validate pipeline
+│   │   ├── validator.py        # Validates LLM tables vs calculator output
+│   │   └── output_validator.py # Validates API responses vs calculator
+│   └── evaluation/
+│       └── llm_judge.py        # Gemini-as-judge groundedness scoring → Langfuse
+├── data/
+│   ├── brokers.yaml            # Broker definitions (7 brokers)
+│   └── output/
+│       ├── fee_rules.json      # Structured FeeRule + HiddenCosts (runtime load)
+│       └── *.json              # Generated analysis reports
+├── scripts/                    # Scrape, generate, eval, and ops scripts
+│   ├── refresh_fee_rules.py    # Re-extract fee rules from PDFs (CLI)
+│   ├── send_weekly_email.py    # Standalone weekly email sender (Task Scheduler)
+│   └── register_weekly_email_task.ps1
+├── tests/                      # Test suite and validations
+└── api/index.py                # Vercel deployment entry
 ```
+
+### Layers
+
+| Layer | Components | Responsibility |
+|-------|-----------|----------------|
+| **API** | `api/server.py` | Request handling, language routing, Langfuse tracing |
+| **Calculation** | `validation/fee_calculator.py`, `persona_calculator.py`, `validator.py`, `output_validator.py` | Deterministic fees, TCO, and validation — the source of truth for every number |
+| **Intelligence** | `sources/llm_extract.py`, `validation/fee_extraction.py`, chat/analysis/notes prompts | LLM extraction and narrative generation (never arithmetic) |
+| **Data** | `data/brokers.yaml`, `data/output/fee_rules.json`, filesystem + in-memory caches | Broker config, structured fee rules, cached rankings |
+| **Observability** | `evaluation/llm_judge.py`, Langfuse | Async tracing, auto groundedness scoring, `/feedback` thumbs-up/down + review queue |
 
 ## 📊 Analysis Capabilities
 
@@ -269,10 +308,15 @@ be-invest/
 
 ## 🤖 LLM Integration
 
-### Supported Models
+### Models by task
 
-- **OpenAI**: GPT-4o, GPT-4 Turbo
-- **Anthropic**: Claude 3 Opus, Claude 3 Haiku
+| Task | Default model | Notes |
+|------|---------------|-------|
+| PDF → raw fee records (`sources/llm_extract.py`) | `claude-sonnet-4-6` | `gpt-4o` also supported (temp 0.0) |
+| Fee-rule structuring & financial-analysis narrative | `claude-sonnet-4-6` | temp 0.0 |
+| Cost-comparison table notes | `claude-sonnet-4-6` | LLM used only for notes, not numbers |
+| Chat endpoint | `groq/llama-3.3-70b-versatile` | falls back to `gemini-2.0-flash`; temp 0.3 |
+| Groundedness judge (`evaluation/llm_judge.py`) | `gemini-2.5-pro` | Google Genai SDK, `GOOGLE_API_KEY` |
 
 ### Enhanced Extraction Features
 
@@ -367,6 +411,7 @@ GET /health                           # Application health check
 GET /brokers                          # List all configured brokers
 GET /cost-analysis                    # Get comprehensive cost analysis
 GET /cost-analysis/{broker_name}      # Get specific broker analysis
+GET /summary                          # Get a high-level broker fee summary
 ```
 
 ### Cost Comparison & Analysis
@@ -375,6 +420,12 @@ GET /cost-comparison-tables           # Generate cost comparison tables (with la
 POST /refresh-and-analyze             # Refresh PDFs and analyze broker fees
 GET /financial-analysis               # Generate detailed financial analysis
 POST /refresh-pdfs                    # Refresh broker fee documents (PDFs)
+```
+
+### Feedback & Notifications
+```http
+POST /feedback                        # Record thumbs-up/down on a chat response (Langfuse score + review queue)
+POST /email/send                      # Manually trigger an immediate broker-fee report email
 ```
 
 ### News Management

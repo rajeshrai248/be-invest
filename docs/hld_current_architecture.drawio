@@ -152,6 +152,28 @@
         </mxCell>
 
         <!-- ============================================================ -->
+        <!-- ADDITIONAL CAPABILITIES & NOTIFICATIONS                       -->
+        <!-- ============================================================ -->
+        <mxCell id="bg_extra" value="" style="rounded=1;fillColor=#FFF9C4;strokeColor=#F9A825;strokeWidth=3;" vertex="1" parent="1">
+          <mxGeometry x="20" y="1130" width="1060" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl_extra" value="ADDITIONAL CAPABILITIES &amp; NOTIFICATIONS" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;fontColor=#F9A825;" vertex="1" parent="1">
+          <mxGeometry x="34" y="1136" width="420" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="cap_news" value="&lt;b&gt;Broker News&lt;/b&gt;&lt;br&gt;&lt;br&gt;Aggregates latest broker announcements&lt;br&gt;Scraped automatically · Served via API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F9A825;strokeColor=#E65100;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1166" width="320" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="cap_email" value="&lt;b&gt;Weekly Email Reports&lt;/b&gt;&lt;br&gt;&lt;br&gt;Automated weekly fee summary&lt;br&gt;Windows Task Scheduler · On-demand send" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F9A825;strokeColor=#E65100;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="380" y="1166" width="320" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="cap_feedback" value="&lt;b&gt;Investor Feedback&lt;/b&gt;&lt;br&gt;&lt;br&gt;Thumbs up / down on chat answers&lt;br&gt;Feeds the quality review queue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F9A825;strokeColor=#E65100;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="720" y="1166" width="340" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e23" value="feedback scores" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeWidth=2;strokeColor=#004D40;fontStyle=2;fontSize=11;" edge="1" source="cap_feedback" target="langfuse" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
         <!-- LEGEND                                                        -->
         <!-- ============================================================ -->
         <mxCell id="legend_bg" value="" style="rounded=1;fillColor=#FAFAFA;strokeColor=#333333;strokeWidth=2;" vertex="1" parent="1">

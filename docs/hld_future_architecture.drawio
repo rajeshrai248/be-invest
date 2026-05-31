@@ -68,8 +68,8 @@
         <mxCell id="bg_human" value="" style="rounded=1;fillColor=#B2EBF2;strokeColor=#006064;strokeWidth=4;" vertex="1" parent="1">
           <mxGeometry x="20" y="918" width="2160" height="188" as="geometry" />
         </mxCell>
-        <mxCell id="lbl_human" value="★  NEW — HUMAN FEEDBACK LAYER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=16;fontColor=#006064;" vertex="1" parent="1">
-          <mxGeometry x="34" y="924" width="500" height="26" as="geometry" />
+        <mxCell id="lbl_human" value="★  HUMAN FEEDBACK LAYER   —   thumbs up/down via POST /feedback is LIVE (Langfuse score + review queue); richer annotation UI planned" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=15;fontColor=#006064;" vertex="1" parent="1">
+          <mxGeometry x="34" y="924" width="1700" height="26" as="geometry" />
         </mxCell>
 
         <!-- ★ NEW: CONTINUOUS IMPROVEMENT LAYER -->
@@ -92,11 +92,11 @@
           <mxGeometry x="40" y="194" width="2120" height="64" as="geometry" />
         </mxCell>
 
-        <mxCell id="ep_cost" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/cost-comparison-tables&lt;/b&gt;&lt;br&gt;&lt;br&gt;Deterministic fee tables — all brokers&lt;br&gt;Validator checks table accuracy&lt;br&gt;LLM used only for notes generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+        <mxCell id="ep_cost" value="&lt;b&gt;GET&lt;/b&gt;&lt;br&gt;&lt;b&gt;/cost-comparison-tables&lt;/b&gt;&lt;br&gt;&lt;br&gt;Deterministic fee tables — all brokers&lt;br&gt;Validator checks table accuracy&lt;br&gt;LLM used only for notes generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
           <mxGeometry x="40" y="300" width="480" height="122" as="geometry" />
         </mxCell>
 
-        <mxCell id="ep_refresh" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/refresh-and-analyze&lt;/b&gt;&lt;br&gt;&lt;br&gt;Scrapes broker PDFs → GPT-4o extracts&lt;br&gt;Claude Sonnet 4 structures fee rules&lt;br&gt;Updates fee_rules.json at runtime" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+        <mxCell id="ep_refresh" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/refresh-and-analyze&lt;/b&gt;&lt;br&gt;&lt;br&gt;Scrapes broker PDFs → Claude Sonnet 4 extracts&lt;br&gt;(GPT-4o optional) → structures fee rules&lt;br&gt;Updates fee_rules.json at runtime" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
           <mxGeometry x="560" y="300" width="480" height="122" as="geometry" />
         </mxCell>
 
@@ -104,7 +104,7 @@
           <mxGeometry x="1080" y="300" width="480" height="122" as="geometry" />
         </mxCell>
 
-        <mxCell id="ep_financial" value="&lt;b&gt;POST&lt;/b&gt;&lt;br&gt;&lt;b&gt;/financial-analysis&lt;/b&gt;&lt;br&gt;&lt;br&gt;Broker comparison narrative&lt;br&gt;Investor-specific recommendations&lt;br&gt;LLM: Claude Sonnet 4 · temp=0.0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+        <mxCell id="ep_financial" value="&lt;b&gt;GET&lt;/b&gt;&lt;br&gt;&lt;b&gt;/financial-analysis&lt;/b&gt;&lt;br&gt;&lt;br&gt;Broker comparison narrative&lt;br&gt;Investor-specific recommendations&lt;br&gt;LLM: Claude Sonnet 4 · temp=0.0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;strokeColor=#BF360C;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
           <mxGeometry x="1600" y="300" width="480" height="122" as="geometry" />
         </mxCell>
 
@@ -120,7 +120,7 @@
           <mxGeometry x="1440" y="460" width="680" height="118" as="geometry" />
         </mxCell>
 
-        <mxCell id="llm_gpt4o" value="&lt;b&gt;GPT-4o  ★&lt;/b&gt;&lt;br&gt;&lt;br&gt;Role: PDF → Raw fee records&lt;br&gt;Module: llm_extract.py&lt;br&gt;temp=0.0  ·  JSON mode" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+        <mxCell id="llm_gpt4o" value="&lt;b&gt;Claude Sonnet 4 / GPT-4o  ★&lt;/b&gt;&lt;br&gt;&lt;br&gt;Role: PDF → Raw fee records&lt;br&gt;Module: llm_extract.py (Claude default)&lt;br&gt;temp=0.0  ·  JSON mode" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C62828;strokeColor=#7F0000;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
           <mxGeometry x="40" y="620" width="470" height="130" as="geometry" />
         </mxCell>
 
@@ -168,7 +168,7 @@
           <mxGeometry x="42" y="954" width="150" height="138" as="geometry" />
         </mxCell>
 
-        <mxCell id="annotation_ui" value="&lt;b&gt;Human Annotation UI&lt;/b&gt;&lt;br&gt;&lt;br&gt;Langfuse Annotations or custom web app&lt;br&gt;View: prompt · output · retrieved context&lt;br&gt;Score: ✗ (0)  ·  ≈ (0.5)  ·  ✓ (1)&lt;br&gt;Add free-text reasoning &amp; comments" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#006064;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
+        <mxCell id="annotation_ui" value="&lt;b&gt;Human Annotation UI&lt;/b&gt;&lt;br&gt;&lt;br&gt;LIVE: POST /feedback → user_feedback score&lt;br&gt;PLANNED: Langfuse Annotations / custom app&lt;br&gt;Score: ✗ (0)  ·  ≈ (0.5)  ·  ✓ (1)&lt;br&gt;Add free-text reasoning &amp; comments" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#006064;strokeColor=#004D40;fontColor=#ffffff;fontSize=12;strokeWidth=2;" vertex="1" parent="1">
           <mxGeometry x="238" y="954" width="440" height="138" as="geometry" />
         </mxCell>
 
