@@ -9,7 +9,9 @@ import logging
 import os
 import re
 import smtplib
+import socket
 import ssl
+import time
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -58,6 +60,23 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", SMTP_USER)
+
+_SMTP_MAX_ATTEMPTS = 3
+_SMTP_PER_ATTEMPT_TIMEOUT = 15  # seconds; 3 attempts × 15s = 45s worst case
+_SMTP_BACKOFF_BASE = 1.5  # seconds; sleeps grow 1.5s, 3.0s, 4.5s ...
+
+# Errors that indicate a transient network condition — safe to retry.
+# Auth/recipient errors are deliberately excluded: they will not self-resolve
+# and retrying just delays a permanent failure response.
+_SMTP_RETRYABLE = (
+    smtplib.SMTPConnectError,
+    smtplib.SMTPServerDisconnected,
+    smtplib.SMTPHeloError,
+    socket.timeout,
+    TimeoutError,
+    ConnectionError,
+    OSError,  # covers most low-level socket errors on Windows (incl. WinError 10060)
+)
 
 
 def _get_recipients() -> list[str]:
@@ -614,13 +633,36 @@ def send_email(subject: str, html_body: str, recipients: list[str]) -> None:
             ssl_context = ssl.create_default_context()
 
     logger.info(f"📧 Sending email to {recipients} via {SMTP_HOST}:{SMTP_PORT}")
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-        server.ehlo()
-        server.starttls(context=ssl_context)
-        server.ehlo()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.sendmail(from_addr, recipients, msg.as_string())
-    logger.info(f"✅ Email sent successfully to {len(recipients)} recipient(s)")
+
+    last_error: Exception | None = None
+    for attempt in range(1, _SMTP_MAX_ATTEMPTS + 1):
+        try:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=_SMTP_PER_ATTEMPT_TIMEOUT) as server:
+                server.ehlo()
+                server.starttls(context=ssl_context)
+                server.ehlo()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(from_addr, recipients, msg.as_string())
+            logger.info(f"✅ Email sent successfully to {len(recipients)} recipient(s) (attempt {attempt})")
+            return
+        except (smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused):
+            # Permanent failures — retrying will not help.
+            raise
+        except _SMTP_RETRYABLE as e:
+            last_error = e
+            if attempt == _SMTP_MAX_ATTEMPTS:
+                logger.error(f"❌ SMTP send failed after {attempt} attempts: {type(e).__name__}: {e}")
+                raise
+            sleep_for = _SMTP_BACKOFF_BASE * attempt
+            logger.warning(
+                f"⚠️  SMTP attempt {attempt}/{_SMTP_MAX_ATTEMPTS} failed "
+                f"({type(e).__name__}: {e}); retrying in {sleep_for:.1f}s"
+            )
+            time.sleep(sleep_for)
+
+    # Defensive: loop should always either return or re-raise above.
+    assert last_error is not None
+    raise last_error
 
 
 def build_and_send_report(recipients_override: list[str] | None = None) -> dict:
