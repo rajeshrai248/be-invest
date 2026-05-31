@@ -221,7 +221,7 @@ except Exception as e:
 **File**: `src/be_invest/api/server.py` (Line ~1430)
 **Evaluates**: Are analysis points grounded in broker data?
 **Context**: Broker cost data
-**Endpoint Spec**: GET /financial-analysis?lang=en&force=false&model=claude-sonnet-4-20250514
+**Endpoint Spec**: GET /financial-analysis?lang=en&force=false&model=claude-sonnet-4-6
 
 **Integration Code**:
 ```python
@@ -246,7 +246,7 @@ except Exception as e:
 **File**: `src/be_invest/api/server.py` (Line ~1864)
 **Evaluates**: Are extracted fee rules correct?
 **Context**: PDF extraction results
-**Endpoint Spec**: POST /refresh-and-analyze?model=claude-sonnet-4-20250514&force=false
+**Endpoint Spec**: POST /refresh-and-analyze?model=claude-sonnet-4-6&force=false
 
 **Integration Code**:
 ```python

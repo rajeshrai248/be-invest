@@ -13,6 +13,7 @@ import re
 import shutil
 import threading
 import time
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from functools import wraps
@@ -23,7 +24,6 @@ from fastapi import FastAPI, HTTPException, Query, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from pydantic import BaseModel, HttpUrl
 
 # ---------------------------------------------------------------------------
 # Langfuse SDK compatibility shim: works with both SDK v2 (langfuse<3) and
@@ -107,6 +107,7 @@ from ..sources.scrape import scrape_fee_records
 from ..sources.news_scrape import scrape_broker_news
 from ..news import NewsFlash, save_news_flash, load_news, get_news_by_broker, delete_news_flash, get_recent_news, get_news_statistics
 from ..utils.cache import FileCache
+from ..llm_models import DEFAULT_CLAUDE_SONNET_MODEL
 from ..validation.validator import validate_comparison_table, build_correction_prompt, patch_table_with_corrections
 from ..validation.fee_calculator import (
     build_comparison_tables, BROKER_NOTES, load_fee_rules, save_fee_rules,
@@ -120,406 +121,21 @@ from ..validation.fee_extraction import (
     parse_llm_extraction_response,
     validate_and_fix_extraction,
 )
-
-# ========================================================================================
-# PYDANTIC MODELS
-# ========================================================================================
-
-class NewsFlashRequest(BaseModel):
-    """Request model for creating news flashes."""
-    broker: str
-    title: str
-    summary: str
-    url: Optional[HttpUrl] = None
-    date: Optional[str] = None
-    source: Optional[str] = None
-    notes: Optional[str] = None
-
-
-class NewsFlashResponse(BaseModel):
-    """Response model for news flashes."""
-    broker: str
-    title: str
-    summary: str
-    url: Optional[str] = None
-    date: Optional[str] = None
-    source: Optional[str] = None
-    notes: Optional[str] = None
-    created_at: Optional[str] = None
-
-
-class NewsDeleteRequest(BaseModel):
-    """Request model for deleting news flashes."""
-    broker: str
-    title: str
-
-
-class ChatMessage(BaseModel):
-    """A single message in conversation history."""
-    role: str
-    content: str
-
-
-class ChatRequest(BaseModel):
-    """Request model for the chatbot endpoint."""
-    question: str
-    history: Optional[List[ChatMessage]] = None
-    model: Optional[str] = None
-    lang: Optional[str] = "en"
-
-
-class EmailSendRequest(BaseModel):
-    """Request model for manual email report trigger."""
-    recipients: Optional[List[str]] = None
-
-
-# ========================================================================================
-# LANGUAGE SUPPORT
-# ========================================================================================
-
-LANGUAGE_MAP = {
-    "en": "English",
-    "fr-be": "French (Belgian)",
-    "nl-be": "Dutch (Belgian)",
-}
-
-
-def _get_language_name(lang: str) -> str:
-    """Map a language code to a full language name for LLM prompts."""
-    return LANGUAGE_MAP.get(lang, "English")
-
-
-# Static translations for persona definitions
-_PERSONA_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
-    "fr-be": {
-        "passive_investor": {
-            "name": "Investisseur Passif",
-            "description": "Achats mensuels d'ETF de 500 EUR. Stratégie d'achat et de conservation à long terme.",
-        },
-        "moderate_investor": {
-            "name": "Investisseur Modéré",
-            "description": "Combinaison d'achats d'ETF et d'actions. Gestion de portefeuille semi-active.",
-        },
-        "active_trader": {
-            "name": "Trader Actif",
-            "description": "Transactions fréquentes d'actions, y compris de grandes positions. Gestion active du portefeuille.",
-        },
-    },
-    "nl-be": {
-        "passive_investor": {
-            "name": "Passieve Belegger",
-            "description": "Maandelijkse ETF-aankopen van 500 EUR. Langetermijn buy-and-hold strategie.",
-        },
-        "moderate_investor": {
-            "name": "Gematigde Belegger",
-            "description": "Mix van ETF- en aandelenaankopen. Semi-actief portefeuillebeheer.",
-        },
-        "active_trader": {
-            "name": "Actieve Handelaar",
-            "description": "Frequente aandelentransacties inclusief grote posities. Actief portefeuillebeheer.",
-        },
-    },
-}
-
-# Static translation fragments for structured broker notes
-_NOTE_LABELS: Dict[str, Dict[str, str]] = {
-    "en": {
-        "custody": "Custody fee",
-        "connectivity": "Connectivity fee",
-        "fx": "FX fee",
-        "subscription": "Subscription",
-        "handling": "Handling fee",
-        "dividend": "Dividend fee",
-        "transfer": "Transfer out",
-        "surcharge": "Surcharges",
-        "market_data": "Market data",
-        "promotion": "Promotions",
-        "other": "Other costs",
-    },
-    "fr-be": {
-        "custody": "Frais de garde",
-        "connectivity": "Frais de connectivité",
-        "fx": "Frais de change",
-        "subscription": "Abonnement",
-        "handling": "Frais de traitement",
-        "dividend": "Frais de dividende",
-        "transfer": "Transfert sortant",
-        "surcharge": "Surcharges",
-        "market_data": "Données de marché",
-        "promotion": "Promotions",
-        "other": "Autres frais",
-    },
-    "nl-be": {
-        "custody": "Bewaarloon",
-        "connectivity": "Connectiviteitskosten",
-        "fx": "Wisselkoerskosten",
-        "subscription": "Abonnement",
-        "handling": "Verwerkingskosten",
-        "dividend": "Dividendkosten",
-        "transfer": "Uitgaande transfer",
-        "surcharge": "Toeslagen",
-        "market_data": "Marktgegevens",
-        "promotion": "Promoties",
-        "other": "Overige kosten",
-    },
-}
-
-# Keyword-to-category mapping for parsing raw notes text
-_NOTE_CATEGORY_KEYWORDS: Dict[str, List[str]] = {
-    "custody": ["custody", "bewaarloon", "garde", "dormant"],
-    "connectivity": ["connectivity", "connectiviteit"],
-    "fx": ["fx", "currency", "exchange cost", "wissel", "conversion"],
-    "subscription": ["subscription", "plan", "abonnement"],
-    "handling": ["handling", "afwikkeling", "settlement"],
-    "dividend": ["dividend", "coupon"],
-    "transfer": ["transfer", "outgoing", "sortant"],
-    "surcharge": ["surcharge", "phone", "offline", "orderdesk"],
-    "market_data": ["real-time", "quotes", "market fee"],
-    "promotion": ["promotion", "youth", "discount", "saveback", "interest on cash", "free trade"],
-}
-
-# Patterns that indicate advantage, warning, or info
-_ADVANTAGE_PATTERNS = ["free", "no custody", "no fee", "no connectivity", "no dividend", "eur 0", "kosteloos", "€0", "geen"]
-_WARNING_PATTERNS = ["not disclosed", "surcharge", "max ", "min eur", "dormant", "debit interest", "late submission"]
-
-
-def _classify_note_category(sentence: str) -> str:
-    """Classify a sentence into a note category using keyword matching."""
-    lower = sentence.lower()
-    for category, keywords in _NOTE_CATEGORY_KEYWORDS.items():
-        for kw in keywords:
-            if kw in lower:
-                return category
-    return "other"
-
-
-def _classify_highlight(sentence: str) -> str:
-    """Classify a sentence's highlight: advantage, warning, or info."""
-    lower = sentence.lower()
-    for pattern in _WARNING_PATTERNS:
-        if pattern in lower:
-            return "warning"
-    for pattern in _ADVANTAGE_PATTERNS:
-        if pattern in lower:
-            return "advantage"
-    return "info"
-
-
-def _parse_notes_text(raw_notes: str) -> List[Dict[str, str]]:
-    """Parse a raw notes string into structured note items.
-
-    Splits on numbered items (e.g. '1) ...') or sentence boundaries ('. '),
-    then classifies each into category + highlight.
-    """
-    import re
-    # Split on numbered items like "1) " or "2. " first
-    parts = re.split(r'\d+\)\s+', raw_notes)
-    # If no numbered items found, split on ". " (sentence boundaries)
-    if len(parts) <= 1:
-        parts = [s.strip() for s in raw_notes.split(". ") if s.strip()]
-    else:
-        # First element is empty string before "1)", filter it out
-        parts = [s.strip().rstrip(".") for s in parts if s.strip()]
-
-    items: List[Dict[str, str]] = []
-    seen_categories: set = set()
-    for part in parts:
-        if not part or len(part) < 5:
-            continue
-        category = _classify_note_category(part)
-        highlight = _classify_highlight(part)
-        # Clean up trailing period
-        description = part.rstrip(".")
-        items.append({
-            "category": category,
-            "label": _NOTE_LABELS["en"][category],
-            "description": description,
-            "highlight": highlight,
-        })
-        seen_categories.add(category)
-    return items
-
-
-def _build_structured_broker_notes() -> Dict[str, List[Dict[str, str]]]:
-    """Build structured broker notes from HiddenCosts data.
-
-    Returns a dict mapping broker display name to a list of structured note
-    items, each with category, label, description, and highlight.
-    """
-    from ..validation.fee_calculator import HIDDEN_COSTS
-
-    notes: Dict[str, List[Dict[str, str]]] = {}
-
-    for broker_name, costs in HIDDEN_COSTS.items():
-        items: List[Dict[str, str]] = []
-
-        # 1. Build items from numeric HiddenCosts fields
-        if costs.custody_fee_monthly_pct == 0 and costs.custody_fee_monthly_min == 0:
-            items.append({"category": "custody", "label": "Custody fee", "description": "Free", "highlight": "advantage"})
-        elif costs.custody_fee_monthly_pct > 0:
-            desc = f"{costs.custody_fee_monthly_pct}%/month"
-            if costs.custody_fee_monthly_min > 0:
-                desc += f" (min EUR{costs.custody_fee_monthly_min:.2f}/month)"
-            items.append({"category": "custody", "label": "Custody fee", "description": desc, "highlight": "info"})
-
-        if costs.connectivity_fee_per_exchange_year == 0:
-            items.append({"category": "connectivity", "label": "Connectivity fee", "description": "Free", "highlight": "advantage"})
-        else:
-            desc = f"EUR{costs.connectivity_fee_per_exchange_year:.2f}/exchange/year"
-            if costs.connectivity_fee_max_pct_account > 0:
-                desc += f" (max {costs.connectivity_fee_max_pct_account}% of account)"
-            items.append({"category": "connectivity", "label": "Connectivity fee", "description": desc, "highlight": "info"})
-
-        if costs.subscription_fee_monthly > 0:
-            desc = f"EUR{costs.subscription_fee_monthly:.2f}/month"
-            if costs.subscription_plan_name:
-                desc = f"{costs.subscription_plan_name}: {desc}"
-            items.append({"category": "subscription", "label": "Subscription", "description": desc, "highlight": "info"})
-
-        if costs.fx_fee_pct == 0:
-            # Check if notes mention FX is "not disclosed" rather than truly free
-            notes_lower = costs.notes.lower() if costs.notes else ""
-            if "not disclosed" in notes_lower and ("fx" in notes_lower or "conversion" in notes_lower or "exchange" in notes_lower):
-                items.append({"category": "fx", "label": "FX fee", "description": "Not disclosed", "highlight": "warning"})
-            else:
-                items.append({"category": "fx", "label": "FX fee", "description": "Free", "highlight": "advantage"})
-        elif costs.fx_fee_pct > 0:
-            items.append({"category": "fx", "label": "FX fee", "description": f"{costs.fx_fee_pct}%", "highlight": "info"})
-
-        if costs.handling_fee_per_trade > 0:
-            items.append({"category": "handling", "label": "Handling fee", "description": f"EUR{costs.handling_fee_per_trade:.2f}/trade", "highlight": "info"})
-
-        if costs.dividend_fee_pct == 0:
-            items.append({"category": "dividend", "label": "Dividend fee", "description": "Free", "highlight": "advantage"})
-        elif costs.dividend_fee_pct > 0:
-            desc = f"{costs.dividend_fee_pct}%"
-            if costs.dividend_fee_min > 0 or costs.dividend_fee_max > 0:
-                min_part = f"min EUR{costs.dividend_fee_min:.2f}" if costs.dividend_fee_min > 0 else ""
-                max_part = f"max EUR{costs.dividend_fee_max:.2f}" if costs.dividend_fee_max > 0 else ""
-                bounds = ", ".join(filter(None, [min_part, max_part]))
-                desc += f" ({bounds})"
-            items.append({"category": "dividend", "label": "Dividend fee", "description": desc, "highlight": "info"})
-
-        # 2. Parse raw notes string for additional items not captured above
-        if costs.notes:
-            numeric_categories = {item["category"] for item in items}
-            parsed = _parse_notes_text(costs.notes)
-            for parsed_item in parsed:
-                # Skip items whose category is already covered by numeric fields
-                if parsed_item["category"] in numeric_categories:
-                    continue
-                items.append(parsed_item)
-
-        notes[broker_name] = items
-
-    # 3. Scan FEE_RULES for conditional rules (e.g. youth discounts) and add as promotion notes
-    for (broker_key, instr_key, exch_key), rule in FEE_RULES.items():
-        if not rule.conditions:
-            continue
-        display = _get_display_name(broker_key)
-        if display not in notes:
-            notes[display] = []
-        for cond in rule.conditions:
-            if cond.get("type") == "age":
-                desc = f"Reduced {instr_key} fees for ages {cond.get('min_age', '')}-{cond.get('max_age', '')} (Youth discount)"
-                # Avoid duplicates
-                if not any(item.get("description") == desc for item in notes[display]):
-                    notes[display].append({
-                        "category": "promotion",
-                        "label": "Youth discount",
-                        "description": desc,
-                        "highlight": "advantage",
-                    })
-
-    return notes
-
-
-_DESCRIPTION_TRANSLATIONS: Dict[str, Dict[str, str]] = {
-    "fr-be": {
-        # broker notes descriptions
-        "Free": "Gratuit",
-        "Not disclosed": "Non divulgué",
-        "/month": "/mois",
-        "/year": "/an",
-        "/exchange/year": "/bourse/an",
-        "/trade": "/transaction",
-        "Youth discount": "Réduction jeunes",
-        "Reduced": "Réduit",
-        "fees for ages": "frais pour les âges",
-        # calculation_logic phrases (generate_explanation output)
-        "Flat fee": "Frais fixe",
-        "handling": "traitement",
-        "minimum": "minimum",
-        "Base fee": "Frais de base",
-        "amount": "montant",
-        "remainder": "reste",
-        "slices": "tranches",
-        "slice": "tranche",
-        "capped at": "plafonné à",
-        "No fee rule for": "Aucune règle de frais pour",
-        "Fee:": "Frais :",
-        "base": "base",
-        "per": "par",
-    },
-    "nl-be": {
-        # broker notes descriptions
-        "Free": "Gratis",
-        "Not disclosed": "Niet bekendgemaakt",
-        "/month": "/maand",
-        "/year": "/jaar",
-        "/exchange/year": "/beurs/jaar",
-        "/trade": "/transactie",
-        "Youth discount": "Jongerenkorting",
-        "Reduced": "Verlaagd",
-        "fees for ages": "kosten voor leeftijden",
-        # calculation_logic phrases (generate_explanation output)
-        "Flat fee": "Vast tarief",
-        "handling": "afwikkeling",
-        "minimum": "minimum",
-        "Base fee": "Basiskosten",
-        "amount": "bedrag",
-        "remainder": "restbedrag",
-        "slices": "schijven",
-        "slice": "schijf",
-        "capped at": "geplafonneerd op",
-        "No fee rule for": "Geen tariefregel voor",
-        "Fee:": "Kosten:",
-        "base": "basis",
-        "per": "per",
-    },
-}
-
-
-def _translate_description(description: str, lang: str) -> str:
-    """Translate a note description string using static substitutions.
-
-    Replaces longer phrases first to avoid partial matches
-    (e.g. 'order amount' before 'amount', 'handling/trade' before 'handling').
-    """
-    translations = _DESCRIPTION_TRANSLATIONS.get(lang, {})
-    result = description
-    for en_text, translated in sorted(translations.items(), key=lambda x: len(x[0]), reverse=True):
-        result = result.replace(en_text, translated)
-    return result
-
-
-def _localize_structured_notes(
-    notes: Dict[str, List[Dict[str, str]]], lang: str
-) -> Dict[str, List[Dict[str, str]]]:
-    """Translate labels and descriptions in structured notes to the target language."""
-    if lang == "en":
-        return notes
-    labels = _NOTE_LABELS.get(lang, _NOTE_LABELS["en"])
-    import copy
-    localized = copy.deepcopy(notes)
-    for broker_items in localized.values():
-        for item in broker_items:
-            cat = item.get("category", "other")
-            if cat in labels:
-                item["label"] = labels[cat]
-            if "description" in item:
-                item["description"] = _translate_description(item["description"], lang)
-    return localized
+from .i18n import (
+    PERSONA_TRANSLATIONS as _PERSONA_TRANSLATIONS,
+    build_structured_broker_notes as _build_structured_broker_notes,
+    get_language_name as _get_language_name,
+    localize_structured_notes as _localize_structured_notes,
+    translate_description as _translate_description,
+)
+from .schemas import (
+    ChatRequest,
+    EmailSendRequest,
+    FeedbackRequest,
+    NewsDeleteRequest,
+    NewsFlashRequest,
+    NewsFlashResponse,
+)
 
 
 # ========================================================================================
@@ -1559,7 +1175,7 @@ def get_cost_analysis() -> Dict[str, Any]:
 @observe(name="cost-comparison-tables")
 def get_cost_comparison_tables(
         request: Request,
-        model: str = Query("claude-sonnet-4-6", description="LLM to use for notes generation"),
+        model: str = Query(DEFAULT_CLAUDE_SONNET_MODEL, description="LLM to use for notes generation"),
         force: bool = Query(False, description="Force fresh generation, ignore cache"),
         lang: str = Query("en", description="Response language: en, fr-be, nl-be")
 ) -> Dict[str, Any]:
@@ -1880,7 +1496,7 @@ def _localize_cost_comparison_response(result: Dict[str, Any], lang: str) -> Dic
 @observe(name="financial-analysis")
 def generate_financial_analysis(
         request: Request,
-        model: str = Query("claude-sonnet-4-6", description="LLM to use: claude-sonnet-4-6 (default), gpt-4o"),
+        model: str = Query(DEFAULT_CLAUDE_SONNET_MODEL, description=f"LLM to use: {DEFAULT_CLAUDE_SONNET_MODEL} (default), gpt-4o"),
         force: bool = Query(False, description="Force fresh generation, ignore cache"),
         lang: str = Query("en", description="Response language: en, fr-be, nl-be")
 ) -> Dict[str, Any]:
@@ -2196,7 +1812,7 @@ def list_brokers() -> List[Dict[str, Any]]:
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Brokers file not found: {path}")
     brokers: List[Broker] = load_brokers_from_yaml(path)
-    return [b.dict() for b in brokers]
+    return [asdict(b) for b in brokers]
 
 
 @app.post("/refresh-pdfs")
@@ -2441,7 +2057,7 @@ def refresh_and_analyze(
         brokers_to_process: Optional[List[str]] = Query(None,
                                                         description="Specific brokers to analyze (if None, analyzes all)"),
         force: bool = Query(False, description="Ignore allowed_to_scrape flag if true"),
-        model: str = Query("claude-sonnet-4-6", description="LLM model: claude-sonnet-4-6 (default), gpt-4o, etc."),
+        model: str = Query(DEFAULT_CLAUDE_SONNET_MODEL, description=f"LLM model: {DEFAULT_CLAUDE_SONNET_MODEL} (default), gpt-4o, etc."),
 ) -> Dict[str, Any]:
     """
     Refresh PDFs, extract text, and generate comprehensive cost analysis.
@@ -3442,12 +3058,6 @@ def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
 # ========================================================================================
 # FEEDBACK ENDPOINT
 # ========================================================================================
-
-
-class FeedbackRequest(BaseModel):
-    trace_id: str
-    rating: str  # "up" or "down"
-    comment: Optional[str] = None
 
 
 @app.post("/feedback", status_code=200)

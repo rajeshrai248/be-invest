@@ -16,6 +16,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.be_invest.models import FeeRecord
+from src.be_invest.llm_models import DEFAULT_CLAUDE_SONNET_MODEL, DEFAULT_OPENAI_MODEL
 from src.be_invest.sources.llm_extract import extract_fee_records_via_llm
 from tests.test_data_quality_validation import (
     EXPECTED_BROKER_FEES,
@@ -216,7 +217,7 @@ def test_llm_extraction_with_enhanced_prompts():
                 text=pdf_text,
                 broker=broker,
                 source_url=f"https://example.com/{broker.lower()}_fees.pdf",
-                model="gpt-4o" if has_openai else "claude-3-haiku-20240307",
+                model=DEFAULT_OPENAI_MODEL if has_openai else DEFAULT_CLAUDE_SONNET_MODEL,
                 llm_cache_dir=Path("data/cache"),
                 chunk_chars=8000,
                 focus_fee_lines=True,

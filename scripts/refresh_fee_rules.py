@@ -73,7 +73,7 @@ if not _api_key:
     sys.exit(1)
 
 _client = anthropic.Anthropic(api_key=_api_key)
-MODEL = "claude-sonnet-4-20250514"
+MODEL = "claude-sonnet-4-6"
 
 
 # ---------------------------------------------------------------------------

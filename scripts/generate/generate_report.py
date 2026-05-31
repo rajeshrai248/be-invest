@@ -108,8 +108,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--llm-model",
-        default="claude-sonnet-4-20250514",
-        help="LLM model to use (default: claude-sonnet-4-20250514).",
+        default="claude-sonnet-4-6",
+        help="LLM model to use (default: claude-sonnet-4-6).",
     )
     parser.add_argument(
         "--llm-api-key-env",

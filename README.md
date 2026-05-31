@@ -167,7 +167,7 @@ curl http://localhost:8000/brokers
 curl http://localhost:8000/cost-analysis
 
 # Generate comparison tables
-curl "http://localhost:8000/cost-comparison-tables?lang=en&model=claude-sonnet-4-20250514"
+curl "http://localhost:8000/cost-comparison-tables?lang=en&model=claude-sonnet-4-6"
 
 # Chat about brokers (natural language)
 curl -X POST "http://localhost:8000/chat" \
@@ -233,8 +233,11 @@ for the planned human-feedback / continuous-improvement direction.
 be-invest/
 ├── src/be_invest/
 │   ├── api/
-│   │   └── server.py            # FastAPI app — all endpoints, Langfuse tracing
+│   │   ├── server.py            # FastAPI app, endpoint wiring, Langfuse tracing
+│   │   ├── schemas.py           # Pydantic request/response models
+│   │   └── i18n.py              # Language names, translations, structured notes
 │   ├── models.py                # Data models (Broker, FeeRecord, ...)
+│   ├── llm_models.py            # Shared LLM model defaults
 │   ├── config_loader.py         # YAML config loading (brokers.yaml)
 │   ├── pipeline.py              # Broker fee data pipeline orchestration
 │   ├── fetchers.py             # Source fetchers (Playwright + filesystem cache)
@@ -271,7 +274,7 @@ be-invest/
 
 | Layer | Components | Responsibility |
 |-------|-----------|----------------|
-| **API** | `api/server.py` | Request handling, language routing, Langfuse tracing |
+| **API** | `api/server.py`, `api/schemas.py`, `api/i18n.py` | Request handling, schemas, language routing, Langfuse tracing |
 | **Calculation** | `validation/fee_calculator.py`, `persona_calculator.py`, `validator.py`, `output_validator.py` | Deterministic fees, TCO, and validation — the source of truth for every number |
 | **Intelligence** | `sources/llm_extract.py`, `validation/fee_extraction.py`, chat/analysis/notes prompts | LLM extraction and narrative generation (never arithmetic) |
 | **Data** | `data/brokers.yaml`, `data/output/fee_rules.json`, filesystem + in-memory caches | Broker config, structured fee rules, cached rankings |
@@ -462,9 +465,12 @@ See [API Documentation](docs/API.md) for detailed endpoint specifications.
 # Run all tests
 python -m pytest tests/
 
-# Run specific validation tests
-python tests/test_llm_extraction_validation.py
-python tests/test_data_quality_validation.py
+# Fast import/API/model smoke checks
+python -m compileall -q src\be_invest
+python -m pytest tests/test_api_core_smoke.py tests/test_llm_model_defaults.py
+
+# Focused validation tests
+python -m pytest tests/test_output_validation.py tests/test_data_quality_validation.py
 
 # Run end-to-end verification
 python scripts/final_verification.py
@@ -474,17 +480,44 @@ python scripts/final_verification.py
 
 - **Data Quality Validation**: Automated checks against known broker fee structures
 - **LLM Extraction Testing**: Realistic document samples for each broker
-- **API Integration Tests**: End-to-end testing of web service endpoints
+- **API Smoke Tests**: In-process FastAPI checks for health, broker loading, cost analysis, and deterministic comparison tables
 - **Performance Benchmarks**: Caching effectiveness and response time monitoring
+- **Live Cache Checks**: `tests/test_cache.py` runs against `localhost:8000` when a server is available and skips otherwise
 
 ## 🔄 Development Workflow
+
+Use the detailed [Development Guide](docs/DEVELOPMENT.md) for local setup, testing strategy, model defaults, and modularization rules.
+
+### Recommended Loop
+
+```bash
+# 1. Create a branch
+git switch -c feature/my-change
+
+# 2. Make focused changes
+
+# 3. Run the fast checks
+python -m compileall -q src\be_invest
+python -m pytest tests/test_api_core_smoke.py tests/test_llm_model_defaults.py
+
+# 4. Run the relevant focused suite before opening a PR
+python -m pytest tests/test_output_validation.py tests/test_data_quality_validation.py
+```
+
+### Module Boundaries
+
+- Keep deterministic fee math in `validation/fee_calculator.py`; do not move arithmetic into prompts.
+- Keep reusable API schemas in `api/schemas.py` and language/note helpers in `api/i18n.py`.
+- Keep shared LLM model IDs in `llm_models.py`; avoid hard-coded model strings in application code.
+- Avoid importing `be_invest.api.server` from lower-level modules. Move reusable helpers to small modules first.
 
 ### Adding New Brokers
 
 1. Update `data/brokers.yaml` with broker configuration
 2. Add test data in `tests/test_data_quality_validation.py`
 3. Create broker-specific extraction rules in `tests/enhanced_llm_prompts.py`
-4. Run validation: `python tests/test_llm_extraction_validation.py`
+4. Refresh fee rules if source text is available
+5. Run validation: `python -m pytest tests/test_llm_extraction_validation.py tests/test_data_quality_validation.py`
 
 ### Updating Fee Structures
 
@@ -492,6 +525,13 @@ python scripts/final_verification.py
 2. Update LLM prompts if needed
 3. Re-run analysis pipeline
 4. Validate results against real broker data
+
+### Updating LLM Defaults
+
+1. Update `src/be_invest/llm_models.py`
+2. Update docs and script help text
+3. Run `python -m pytest tests/test_llm_model_defaults.py`
+4. Search for stale model IDs with `rg "claude-|gpt-|gemini-|groq/"`
 
 ## 🚀 Deployment
 
@@ -627,20 +667,18 @@ vercel
 ## 📚 Documentation
 
 ### Getting Started
-- **[DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)** ⭐ - Complete Docker setup and deployment guide (recommended)
 - **[.env.example](.env.example)** - Environment variable configuration template
+- **[Development Guide](docs/DEVELOPMENT.md)** - Local setup, testing, model defaults, modularization rules, and contribution workflow
 
 ### Additional Resources
-For more detailed documentation, see the **[docs/ folder](docs/)** which contains:
+For maintained project documentation, see the **[docs index](docs/README.md)**:
 
-- **[API Reference](docs/API.md)** - Complete API documentation
-- **[React Integration](docs/REACT_INTEGRATION.md)** - Frontend integration guide with examples
-- **[Development Guide](docs/DEVELOPMENT.md)** - Contributing and development setup
-- **[Data Sources](docs/DATA_SOURCES.md)** - Information about broker data sources
-- **[LLM Integration](docs/LLM_INTEGRATION.md)** - Advanced LLM configuration
-- **[Deployment Guide](docs/DEPLOYMENT.md)** - Production deployment instructions
+- **[Business Flow](docs/business_flow.md)** - Stakeholder-level data flow and system responsibilities
+- **[Fee Model](docs/fee_model.md)** - Fee rule schema, tier definitions, exchange naming, and provenance
+- **[Current Architecture](docs/hld_current_architecture.drawio)** - Draw.io architecture source
+- **[Future Architecture](docs/hld_future_architecture.drawio)** - Planned human-feedback and model-router architecture
 
-📖 **[Documentation Index](docs/README.md)** - Navigate all available documentation
+Root-level operational references include `QUICK_REFERENCE.md`, `LANGFUSE-SETUP.md`, `langfuse-nginx-deployment.md`, and `CHANGELOG.md`.
 
 ## 🤝 Contributing
 
@@ -658,12 +696,11 @@ git clone https://github.com/your-username/be-invest.git
 cd be-invest
 pip install -e ".[dev]"
 
-# Run pre-commit hooks
-pre-commit install
-
 # Run tests
 python -m pytest tests/ -v
 ```
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) before adding endpoints, changing model defaults, or touching fee-calculation behavior.
 
 ## 🆘 Support
 

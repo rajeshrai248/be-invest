@@ -5,13 +5,27 @@ Quick test script to verify caching is working in API endpoints.
 
 import requests
 import time
-import json
-from pathlib import Path
+
+import pytest
 
 BASE_URL = "http://localhost:8000"
 
+
+def _require_running_api():
+    """Skip pytest collection unless the live API server is available."""
+    try:
+        resp = requests.get(f"{BASE_URL}/health", timeout=5)
+    except requests.ConnectionError as exc:
+        pytest.skip(f"API server is not running at {BASE_URL}: {exc}")
+
+    if resp.status_code != 200:
+        pytest.skip(f"API server health check returned {resp.status_code}")
+
+
 def test_cost_comparison_caching():
     """Test /cost-comparison-tables endpoint caching."""
+    _require_running_api()
+
     print("\n" + "=" * 80)
     print("🧪 Testing /cost-comparison-tables caching")
     print("=" * 80)
@@ -30,7 +44,7 @@ def test_cost_comparison_caching():
         print(f"   📊 Response keys: {list(data1.keys())}")
     else:
         print(f"   ❌ Error: {resp1.text[:200]}")
-        return False
+        pytest.fail(f"/cost-comparison-tables returned {resp1.status_code}")
 
     # Second call (should use cache)
     print("\n📞 Call 2: Should return cached result...")
@@ -54,11 +68,12 @@ def test_cost_comparison_caching():
     resp3 = requests.get(endpoint, params={"model": "gpt-4o", "force": True})
     elapsed3 = time.time() - start
     print(f"   ✅ Status: {resp3.status_code}, Duration: {elapsed3:.2f}s")
-
-    return True
+    assert resp3.status_code == 200
 
 def test_financial_analysis_caching():
     """Test /financial-analysis endpoint caching."""
+    _require_running_api()
+
     print("\n" + "=" * 80)
     print("🧪 Testing /financial-analysis caching")
     print("=" * 80)
@@ -74,7 +89,7 @@ def test_financial_analysis_caching():
 
     if resp1.status_code != 200:
         print(f"   ❌ Error: {resp1.text[:200]}")
-        return False
+        pytest.fail(f"/financial-analysis returned {resp1.status_code}")
 
     # Second call (cached)
     print("\n📞 Call 2: Should return cached result...")
@@ -86,11 +101,12 @@ def test_financial_analysis_caching():
     if elapsed2 < elapsed1:
         speedup = elapsed1 / elapsed2 if elapsed2 > 0 else float('inf')
         print(f"   ⚡ Speedup: {speedup:.1f}x faster")
-
-    return True
+    assert resp2.status_code == 200
 
 def test_news_scraping_caching():
     """Test /news/scrape endpoint caching."""
+    _require_running_api()
+
     print("\n" + "=" * 80)
     print("🧪 Testing /news/scrape caching")
     print("=" * 80)
@@ -110,7 +126,7 @@ def test_news_scraping_caching():
         print(f"   💾 From cache: {data1.get('from_cache', False)}")
     else:
         print(f"   ❌ Error: {resp1.text[:200]}")
-        return False
+        pytest.fail(f"/news/scrape returned {resp1.status_code}")
 
     # Second call (should use cache)
     print("\n📞 Call 2: Should return cached news...")
@@ -139,8 +155,7 @@ def test_news_scraping_caching():
     if resp3.status_code == 200:
         data3 = resp3.json()
         print(f"   💾 From cache: {data3.get('from_cache', False)}")
-
-    return True
+    assert resp3.status_code == 200
 
 if __name__ == "__main__":
     print("\n" + "=" * 80)

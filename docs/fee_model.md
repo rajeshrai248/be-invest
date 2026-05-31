@@ -103,7 +103,7 @@ narrows when a rule applies. An empty list means the rule is the default/standar
   "pdf": "bolero_fee_schedule_2026.pdf",
   "page": 3,
   "extracted_at": "2026-03-01T10:30:00",
-  "model": "claude-sonnet-4-20250514"
+  "model": "claude-sonnet-4-6"
 }
 ```
 

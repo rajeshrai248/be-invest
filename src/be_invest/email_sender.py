@@ -700,8 +700,8 @@ def build_and_send_report(recipients_override: list[str] | None = None) -> dict:
     tables["hidden_costs"] = dict(HIDDEN_COSTS)
 
     # Include structured notes (with promotions from FEE_RULES conditions)
-    from .api.server import _build_structured_broker_notes
-    tables["structured_notes"] = _build_structured_broker_notes()
+    from .api.i18n import build_structured_broker_notes
+    tables["structured_notes"] = build_structured_broker_notes()
 
     html_body = build_email_html(tables)
 

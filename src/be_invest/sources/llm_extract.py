@@ -1,6 +1,6 @@
 """LLM-backed extraction of broker fee records from text (PDF/HTML).
 
-Uses OpenAI GPT-4o or Anthropic Claude 3 Opus to convert extracted text into
+Uses OpenAI GPT-4o or Anthropic Claude Sonnet to convert extracted text into
 normalized FeeRecord rows with evidence snippets, under strict JSON constraints.
 Results are cached by content hash and model to avoid re-billing for identical inputs.
 """
@@ -14,6 +14,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 import logging
+
+from ..llm_models import DEFAULT_CLAUDE_SONNET_MODEL
 
 try:
     from openai import OpenAI
@@ -275,7 +277,7 @@ def extract_fee_records_via_llm(
     broker: str,
     source_url: str,
     *,
-    model: str = "claude-sonnet-4-6",
+    model: str = DEFAULT_CLAUDE_SONNET_MODEL,
     llm_cache_dir: Optional[os.PathLike] = None,
     max_output_tokens: int = 2000,
     temperature: float = 0.0,

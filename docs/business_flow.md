@@ -30,8 +30,8 @@ flowchart TD
         direction TB
         BROKERS["🏦 Belgian Brokers\nDegiro · Bolero · Keytrade\nING · Rebel · Revolut · Trade Republic"]
         SCRAPER["🕷️ Web Scraper\nPlaywright + Requests"]
-        LLM_EXTRACT["🤖 AI Extraction\nGPT-4o · temp=0.0"]
-        LLM_STRUCT["🤖 AI Structuring\nClaude Sonnet · temp=0.0"]
+        LLM_EXTRACT["🤖 AI Extraction\nClaude Sonnet 4.6 / GPT-4o · temp=0.0"]
+        LLM_STRUCT["🤖 AI Structuring\nClaude Sonnet 4.6 · temp=0.0"]
         FEE_DB[("💾 fee_rules.json")]
         BROKERS -->|"PDFs & pages"| SCRAPER -->|"Raw text"| LLM_EXTRACT
         LLM_EXTRACT -->|"Fee records"| LLM_STRUCT -->|"Validated rules"| FEE_DB
@@ -51,7 +51,7 @@ flowchart TD
     subgraph AI["🤖 AI Services"]
         direction TB
         AI_CHAT["💬 Chat AI\nGroq / Llama 3.3 70B"]
-        AI_ANALYSIS["📈 Analysis AI\nClaude Sonnet"]
+        AI_ANALYSIS["📈 Analysis AI\nClaude Sonnet 4.6"]
     end
 
     %% LAYER 6 — News Intelligence
@@ -67,7 +67,7 @@ flowchart TD
     %% LAYER 7 — Email Service
     subgraph EMAIL_SYS["📧 Weekly Email Reports"]
         direction TB
-        EMAIL_SCHED["⏰ Weekly (Mon 09:00 UTC)"]
+        EMAIL_SCHED["⏰ Weekly Task Scheduler\nMon 09:00 local"]
         EMAIL_BUILD["🏗️ HTML Report Builder"]
         SMTP["📮 Gmail SMTP"]
         EMAIL_SCHED -->|"Schedule"| EMAIL_BUILD -->|"Send"| SMTP
@@ -136,7 +136,7 @@ flowchart TD
 
 | Flow | Trigger | Key Steps | Output |
 |------|---------|-----------|--------|
-| **A · Fee Refresh** | Admin runs `/refresh-and-analyze` | Scrape PDFs → GPT-4o extract → Claude structure → Save | Updated `fee_rules.json` |
+| **A · Fee Refresh** | Admin runs `/refresh-and-analyze` | Scrape PDFs → Claude/GPT-4o extract → Claude structure → Save | Updated `fee_rules.json` |
 | **B · Fee Comparison** | User requests `/cost-comparison-tables` | Load rules → Compute fees → Build tables + notes | Fee matrix + TCO rankings |
 | **C · AI Chat** | User posts question to `/chat` | Parse intent → Pre-compute fees → Groq/Llama answer | Natural language response |
 | **D · Financial Analysis** | User calls `/financial-analysis` | Load tables → Claude narrative → Return report | Written analysis |
@@ -149,7 +149,7 @@ flowchart TD
 ## Key Design Principles
 
 - **Deterministic-first:** Fees are computed by pure Python rules (no AI guessing) — AI is only used for extraction, structuring, and natural language output.
-- **AI-as-a-Tool:** Three separate LLMs handle different jobs: GPT-4o (extraction), Claude (structuring + analysis), Groq/Llama (chat speed).
+- **AI-as-a-Tool:** Separate LLMs handle different jobs: Claude/GPT-4o for extraction, Claude for structuring and analysis, Groq/Llama for chat speed.
 - **Continuous Quality:** Every AI-generated response is independently scored by a fourth model (Gemini Judge) and logged to Langfuse.
-- **Scheduled Automation:** News scraping (daily) and email reporting (weekly) run as daemon threads — no manual intervention needed.
+- **Scheduled Automation:** News scraping is API-managed; weekly email should run through the standalone scheduler script so host sleep/restart behavior is explicit.
 - **Security by default:** All requests pass through rate limiting and IP blocking before reaching any business logic.

@@ -26,7 +26,7 @@ def main():
     print("📋 AVAILABLE SCRIPTS:\n")
 
     print("1. FULL LLM PIPELINE (Recommended with valid OpenAI API key):")
-    print("   python scripts/generate_summary.py --model claude-sonnet-4-20250514\n")
+    print("   python scripts/generate_summary.py --model claude-sonnet-4-6\n")
     print("   Features:")
     print("   - Uses GPT-4o (latest OpenAI model)")
     print("   - Intelligent fee structure extraction")

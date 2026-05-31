@@ -238,7 +238,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python generate_summary.py --model claude-sonnet-4-20250514
+  python generate_summary.py --model claude-sonnet-4-6
   python generate_summary.py --pdf-text-dir data/output/pdf_text
   python generate_summary.py --output my_report.md --log-level DEBUG
         """
@@ -259,8 +259,8 @@ Examples:
     parser.add_argument(
         "--model",
         type=str,
-        default="claude-sonnet-4-20250514",
-        help="LLM model (default: claude-sonnet-4-20250514)",
+        default="claude-sonnet-4-6",
+        help="LLM model (default: claude-sonnet-4-6)",
     )
     parser.add_argument(
         "--api-key-env",
